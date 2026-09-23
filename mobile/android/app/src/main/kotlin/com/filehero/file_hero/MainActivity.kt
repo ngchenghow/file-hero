@@ -45,6 +45,7 @@ class MainActivity : FlutterActivity() {
         return file
     }
     private data class Batch(val header: MutableMap<String,String> = mutableMapOf(), val files: MutableMap<String,MutableMap<String,String>> = mutableMapOf())
+    private class ManifestCommittedException(message: String) : IllegalStateException(message)
     private fun readBatch(dir: DocumentFile, strict: Boolean = true): Batch {
         val doc = dir.findFile("file-readme.txt") ?: return Batch()
         val text = contentResolver.openInputStream(doc.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("无法读取批次说明")
@@ -79,7 +80,7 @@ class MainActivity : FlutterActivity() {
             if(old != null) { require(old.renameTo("file-readme.txt.backup")) { "此存储设备不支持安全替换说明" }; renamed = true }
             require(temp.renameTo("file-readme.txt")) { "无法提交批次说明" }
         } catch(e: Exception) { temp.delete(); if(renamed) old?.renameTo("file-readme.txt"); throw e }
-        if(old != null) require(old.delete()) { "说明已保存，但临时备份未能删除" }
+        if(old != null && !old.delete()) throw ManifestCommittedException("说明已保存，但临时备份未能删除")
     }
     private fun readMeta(file: DocumentFile): Map<String,String> {
         val batch = readBatch(file.parentFile ?: error("Missing parent"), false)
@@ -193,7 +194,7 @@ class MainActivity : FlutterActivity() {
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
-                "importSelected" -> importSelected(file, call.argument<String>("name") ?: "", call.argument<String>("description") ?: "")
+                "importSelected" -> importSelected(file, call.argument<String>("name") ?: "", call.argument<String>("description") ?: "", call.argument<Boolean>("existing") ?: false)
                 else -> error("Unknown method")
             }
         }
@@ -229,23 +230,46 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
-    private fun importSelected(parent: DocumentFile, batchName: String, description: String): Map<String,Any> {
-        require(parent.isDirectory && parent.canWrite()) { "SSD 目标目录不可写" }; valid(batchName)
+    private fun importSelected(parent: DocumentFile, batchName: String, description: String, existing: Boolean): Map<String,Any> {
+        require(parent.isDirectory && parent.canWrite()) { "SSD 目标目录不可写" }
+        if(!existing) valid(batchName)
         require(description.toByteArray(Charsets.UTF_8).size <= 8192 && !description.contains('\n') && !description.contains('\r')) { "描述最多 8192 UTF-8 字节" }
         require(selectedSources.isNotEmpty()) { "请先选择文件" }
-        require(parent.findFile(batchName) == null) { "此文件夹已存在，请更换批次名称" }
         val sources = selectedSources.toList()
-        val dest = parent.createDirectory(batchName) ?: error("无法在 SSD 创建文件夹")
+        // Validate the entire destination before creating or copying anything.
+        val batch = if(existing) readBatch(parent) else Batch()
+        if(existing) {
+            val children = parent.listFiles()
+            val occupied = children.mapNotNull { it.name?.lowercase(Locale.ROOT) }.toSet()
+            require(!occupied.contains("file-readme.txt.tmp") && !occupied.contains("file-readme.txt.backup")) { "请先恢复此文件夹内未完成写入的说明" }
+            for((_, name) in sources) require(name.lowercase(Locale.ROOT) !in occupied) { "已有同名文件：$name。不会覆盖，请选择其他文件夹或新建文件夹" }
+            val previous = batch.files.toMap(); batch.files.clear()
+            for(file in children) if(file.isFile && !file.name.equals("file-readme.txt", true)) {
+                val name = file.name ?: error("文件名不可读"); valid(name)
+                batch.files[name] = record(file, previous[name] ?: mutableMapOf())
+            }
+        } else {
+            require(parent.findFile(batchName) == null) { "此文件夹已存在，请选择已有文件夹模式或更换名称" }
+            batch.header["Description"] = description
+        }
+        val dest = if(existing) parent else parent.createDirectory(batchName) ?: error("无法在 SSD 创建文件夹")
+        val createdFiles = mutableListOf<DocumentFile>()
+        var warning = ""
         try {
-            val batch = Batch(); batch.header["Description"] = description; batch.header["Last-Stored-UTC"] = utc()
+            batch.header["Last-Stored-UTC"] = utc()
             for((source, name) in sources) {
                 val created = dest.createFile(contentResolver.getType(source) ?: "application/octet-stream", name) ?: error("无法创建文件")
+                createdFiles.add(created)
                 copy(source, created.uri); batch.files[created.name!!] = record(created, stored = true)
             }
             writeBatch(dest, batch)
-        } catch(e: Exception) { dest.delete(); throw e }
+        } catch(e: ManifestCommittedException) { warning = e.message ?: "说明备份未能清理" }
+        catch(e: Exception) {
+            if(existing) { createdFiles.forEach { it.delete() } } else { dest.delete() }
+            throw e
+        }
         selectedSources = emptyList()
-        return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size)
+        return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size, "path" to if(existing) "" else (dest.name ?: batchName), "warning" to warning)
     }
     private fun copy(source: Uri, target: Uri) {
         contentResolver.openInputStream(source)?.use { input -> contentResolver.openOutputStream(target, "wt")?.use { output -> input.copyTo(output, 1024 * 1024) } ?: error("无法写入目标") } ?: error("无法读取源文件")

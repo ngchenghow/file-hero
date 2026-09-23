@@ -22,7 +22,7 @@ class FilesPage extends StatefulWidget {
 class _FilesPageState extends State<FilesPage> {
   static const channel = MethodChannel('com.filehero/storage');
   bool connected = false, busy = false;
-  String folder = '', driveName = '', query = '', message = '先选择文件，再选择 SSD 并新建文件夹存入。';
+  String folder = '', driveName = '', query = '', message = '从相册或文件管理器分享文件到 File Hero。';
   List<Map<String, dynamic>> entries = [];
   final Map<String, Future<Uint8List?>> thumbnails = {};
   bool checkingShares = false, sharePending = false;
@@ -43,7 +43,15 @@ class _FilesPageState extends State<FilesPage> {
     await work(() async {
       final picked = await call('takeSharedFiles') as List?;
       if(!mounted) return;
-      if(picked == null) { setState(() => message = previousMessage); return; }
+      if(picked == null) {
+        if(!connected) {
+          final target = await call('restoreTarget') as String?;
+          if(!mounted) return;
+          if(target != null) { setState(() { connected = true; driveName = target; }); await load(''); }
+        }
+        if(mounted) { setState(() => message = previousMessage); }
+        return;
+      }
       sharePending = true;
       await saveShared(picked.cast<String>());
     });
@@ -51,31 +59,43 @@ class _FilesPageState extends State<FilesPage> {
     if(mounted && sharePending) { Future<void>.microtask(checkShares); }
   }
   Future<void> saveShared(List<String> picked) async {
-    var target = await call('restoreTarget') as String?;
+    final target = await call('restoreTarget') as String?;
     if(!mounted) return;
-    target ??= await call('connect') as String?;
-    if(!mounted) return;
-    if(target == null) { setState(() => message = '已取消分享存入，未创建文件夹'); return; }
-    final selectedTarget = target;
-    setState(() { connected = true; driveName = selectedTarget; folder = ''; entries = []; thumbnails.clear(); });
-    var name = '分享-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').replaceAll('.', '-')}';
-    var description = '';
+    setState(() { connected = target != null; driveName = target ?? ''; folder = ''; entries = []; thumbnails.clear(); });
+    var name = '分享-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').split('.').first}';
+    var description = '', mode = 'new';
+    var existingReady = false;
     while(true) {
       if(!mounted) return;
-      final form = await showDialog<Map<String,String>>(context: context, builder: (context) => _ShareSaveDialog(target: driveName, files: picked, initialName: name, initialDescription: description));
+      final form = await showDialog<Map<String,String>>(context: context, builder: (context) => _ShareSaveDialog(target: driveName, initialName: name, initialDescription: description, initialMode: mode, existingReady: existingReady, count: picked.length));
       if(!mounted) return;
-      if(form == null) { await load(''); if(mounted) { setState(() => message = '已取消分享存入，未创建文件夹'); } return; }
-      name = form['name']!; description = form['description']!;
+      if(form == null) {
+        if(connected) { await load(''); }
+        if(mounted) { setState(() => message = '已取消分享存入，未存入任何文件'); }
+        return;
+      }
+      name = form['name']!; description = form['description']!; mode = form['mode']!;
+      existingReady = form['existingReady'] == 'true';
       if(form['action'] == 'target') {
         final changed = await call('connect') as String?;
         if(!mounted) return;
-        if(changed != null) { setState(() { driveName = changed; folder = ''; entries = []; }); }
+        if(changed != null) {
+          existingReady = mode == 'existing';
+          setState(() { connected = true; driveName = changed; folder = ''; entries = []; });
+        }
         continue;
       }
-      setState(() => message = '正在将分享的 ${picked.length} 个文件存入 SSD，请勿拔盘…');
-      final result = await call('importSelected', {'path': '', 'name': name.trim(), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')});
-      await load(result['batch'] as String);
-      if(mounted) { setState(() => message = '已存入分享批次「${result['batch']}」：${result['imported']} 个文件和一份 file-readme.txt'); }
+      setState(() => message = '正在存入 ${picked.length} 个文件，请勿拔盘…');
+      dynamic result;
+      try {
+        result = await call('importSelected', {'path': '', 'existing': mode == 'existing', 'name': name.trim(), 'description': mode == 'existing' ? '' : description.replaceAll(RegExp(r'[\r\n]+'), ' ')});
+      } on PlatformException catch(e) {
+        if(!mounted) return;
+        await showDialog<void>(context: context, builder: (context) => AlertDialog(title: const Text('未能存入'), content: Text(e.message ?? '请重新选择目标文件夹'), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('重新选择'))]));
+        continue;
+      }
+      await load(result['path'] as String);
+      if(mounted) { setState(() => message = '已存入「${result['batch']}」：${result['imported']} 个文件；说明已更新。${result['warning'] ?? ''}'); }
       return;
     }
   }
@@ -99,35 +119,6 @@ class _FilesPageState extends State<FilesPage> {
   }
   Future<String?> textPrompt(String title, {String initial = ''}) async {
     return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
-  }
-  Future<void> importBatch() async {
-    await work(() async {
-      final picked = await call('pickFiles') as List?;
-      if(!mounted) return;
-      if(picked == null || picked.isEmpty) { setState(() => message = '已取消选择文件'); return; }
-      setState(() => message = '已选 ${picked.length} 个文件，请选择 SSD 中的目标目录。');
-      final target = await call('connect');
-      if(!mounted) return;
-      if(target == null) { setState(() => message = '已取消选择 SSD，未存入任何文件'); return; }
-      setState(() { connected = true; driveName = target as String; folder = ''; entries = []; query = ''; });
-      final name = await textPrompt('在 SSD 新建文件夹', initial: '批次-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').split('.').first}');
-      if(!mounted) return;
-      if(name == null) { await load(''); setState(() => message = '已取消，未创建文件夹'); return; }
-      final description = await textPrompt('本批文件的描述');
-      if(!mounted) return;
-      if(description == null) { await load(''); setState(() => message = '已取消，未创建文件夹'); return; }
-      final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-        title: const Text('准备存入 SSD'),
-        content: SingleChildScrollView(child: Text('新文件夹：$driveName / ${name.trim()}\n\n已选 ${picked.length} 个文件：\n${picked.take(12).join('\n')}${picked.length > 12 ? '\n…' : ''}\n\n描述：$description\n\n本批文件共用一个 file-readme.txt。')),
-        actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('新建文件夹并存入'))],
-      ));
-      if(!mounted) return;
-      if(confirmed != true) { await load(''); setState(() => message = '已取消，未存入任何文件'); return; }
-      setState(() => message = '正在 SSD 新建文件夹并复制 ${picked.length} 个文件，请勿拔盘…');
-      final result = await call('importSelected', {'path': '', 'name': name.trim(), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')});
-      await load(result['batch'] as String);
-      if(mounted) { setState(() => message = '已存入「${result['batch']}」：${result['imported']} 个文件和一份 file-readme.txt'); }
-    });
   }
   Future<void> detail(Map<String,dynamic> file) async {
     final meta = Map<String,dynamic>.from(file['metadata'] as Map? ?? {});
@@ -178,53 +169,57 @@ class _FilesPageState extends State<FilesPage> {
   Widget build(BuildContext context) {
     final visible = entries.where((e) => (e['name'] as String).toLowerCase().contains(query.toLowerCase())).toList();
     return Scaffold(
-      appBar: AppBar(title: const Text('file-hero', style: TextStyle(fontWeight: FontWeight.w700)), actions: [IconButton(tooltip: '选择 SSD / 文件夹', onPressed: busy ? null : () => work(() async { final result = await call('connect'); if(result != null) { setState(() { connected = true; driveName = result as String; }); await load(''); } else { setState(() => message = '已取消连接'); } }), icon: const Icon(Icons.usb))]),
+      appBar: AppBar(title: const Text('file-hero', style: TextStyle(fontWeight: FontWeight.w700))),
       body: Column(children: [
         Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('每份文件，都有故事。', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 8), Text(connected ? driveName : '你的 SSD 随身文件库', style: const TextStyle(color: Color(0xff528a67))), const SizedBox(height: 16), TextField(decoration: const InputDecoration(hintText: '搜索当前文件夹', prefixIcon: Icon(Icons.search), filled: true, border: OutlineInputBorder(borderSide: BorderSide.none)), onChanged: (value) => setState(() => query = value)),
           if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
         ])),
         if(busy) const LinearProgressIndicator(),
-        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('1. 选择要存入的文件（可多选）\n2. 选择 SSD 目标目录\n3. 新建批次文件夹并存入\n\n也可点击右上角 USB 图标浏览 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。选择文件并存入 SSD。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
+        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('在相册或文件管理器选择文件\n点击分享 → File Hero\n\n选择新建文件夹或已有文件夹存入 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。请从其他应用分享文件到 File Hero。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
         Padding(padding: const EdgeInsets.all(16), child: Text(message, style: const TextStyle(fontSize: 12), maxLines: 4)),
-        SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(12,0,12,12), child: Wrap(spacing: 8, children: [
-          FilledButton.icon(onPressed: busy ? null : importBatch, icon: const Icon(Icons.upload), label: const Text('选择文件并存入 SSD')),
-          if(connected) OutlinedButton(onPressed: busy ? null : () => work(() async { final n = await call('index'); await load(); setState(() => message = '已将 $n 个文件的信息更新到各文件夹的 file-readme.txt'); }), child: const Text('更新说明')),
-          if(connected) TextButton(onPressed: busy ? null : () async { final name = await textPrompt('新建文件夹'); if(name != null) { await work(() async { await call('mkdir', {'name': name.trim()}); await load(); }); } }, child: const Text('＋ 文件夹')),
-        ]))),
+
       ]),
     );
   }
 }
 
 class _ShareSaveDialog extends StatefulWidget {
-  const _ShareSaveDialog({required this.target, required this.files, required this.initialName, required this.initialDescription});
-  final String target, initialName, initialDescription;
-  final List<String> files;
+  const _ShareSaveDialog({required this.target, required this.initialName, required this.initialDescription, required this.initialMode, required this.existingReady, required this.count});
+  final String target, initialName, initialDescription, initialMode;
+  final bool existingReady;
+  final int count;
   @override
   State<_ShareSaveDialog> createState() => _ShareSaveDialogState();
 }
-
 class _ShareSaveDialogState extends State<_ShareSaveDialog> {
   late final TextEditingController name, description;
+  late String mode;
+  late bool existingReady;
   final formKey = GlobalKey<FormState>();
   @override
-  void initState() { super.initState(); name = TextEditingController(text: widget.initialName); description = TextEditingController(text: widget.initialDescription); }
+  void initState() { super.initState(); name = TextEditingController(text: widget.initialName); description = TextEditingController(text: widget.initialDescription); mode = widget.initialMode; existingReady = widget.existingReady; }
   @override
   void dispose() { name.dispose(); description.dispose(); super.dispose(); }
   void finish(String action) {
     if(action == 'save' && !formKey.currentState!.validate()) return;
-    Navigator.pop(context, {'action': action, 'name': name.text, 'description': description.text});
+    Navigator.pop(context, {'action': action, 'name': name.text, 'description': description.text, 'mode': mode, 'existingReady': existingReady.toString()});
   }
+  void selectMode(String value) { setState(() { if(mode != value) { existingReady = false; } mode = value; }); }
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('分享文件存入 SSD'),
     content: SingleChildScrollView(child: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('目标：${widget.target}'), const SizedBox(height: 10),
-      Text('已接收 ${widget.files.length} 个文件\n${widget.files.take(5).join('\n')}${widget.files.length > 5 ? '\n…' : ''}', style: const TextStyle(fontSize: 12)), const SizedBox(height: 16),
-      TextFormField(key: const ValueKey('share-name'), controller: name, decoration: const InputDecoration(labelText: '新批次文件夹名称'), validator: (value) => value == null || value.trim().isEmpty ? '请输入文件夹名称' : null), const SizedBox(height: 12),
-      TextFormField(key: const ValueKey('share-description'), controller: description, maxLines: 3, decoration: const InputDecoration(labelText: '这批文件的描述（可选）')),
+      Text('已接收 ${widget.count} 个文件'), const SizedBox(height: 12),
+      Wrap(spacing: 8, children: [ChoiceChip(label: const Text('新建文件夹'), selected: mode == 'new', onSelected: (_) => selectMode('new')), ChoiceChip(label: const Text('已有文件夹'), selected: mode == 'existing', onSelected: (_) => selectMode('existing'))]),
+      const SizedBox(height: 12),
+      Text(mode == 'existing' && !existingReady ? '请选择要存入的已有文件夹' : widget.target.isEmpty ? '请选择 SSD 存放位置' : '目标：${widget.target}'),
+      TextButton.icon(onPressed: () => finish('target'), icon: const Icon(Icons.folder_open), label: Text(mode == 'existing' ? '选择已有文件夹' : '选择存放位置')),
+      if(mode == 'new') ...[
+        TextFormField(key: const ValueKey('share-name'), controller: name, decoration: const InputDecoration(labelText: '文件夹名称'), validator: (value) => value == null || value.trim().isEmpty ? '请输入文件夹名称' : null), const SizedBox(height: 12),
+        TextFormField(key: const ValueKey('share-description'), controller: description, maxLines: 3, decoration: const InputDecoration(labelText: '描述（可选）')),
+      ] else const Text('文件将直接存入所选文件夹，保留原有描述。同名文件不会覆盖。', style: TextStyle(fontSize: 12)),
     ]))),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), TextButton(onPressed: () => finish('target'), child: const Text('更换 SSD')), FilledButton(onPressed: () => finish('save'), child: const Text('存入'))],
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: (mode == 'existing' ? existingReady : widget.target.isNotEmpty) ? () => finish('save') : null, child: const Text('存入'))],
   );
 }
 

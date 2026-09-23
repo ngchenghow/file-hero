@@ -91,3 +91,5 @@ Windows CI 可手动运行「Build and test」，选择 `all`。桌面和 Androi
 结构：`native/` C++ 引擎；`desktop/` Electron；`mobile/` Flutter 与 Kotlin；`scripts/` 构建；`tests/` 引擎测试。
 
 实现参考：[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter 平台通道](https://docs.flutter.dev/platform-integration/platform-channels)、[Electron 安全说明](https://www.electronjs.org/docs/latest/tutorial/security)。
+
+Android v0.1.3：入口改为系统分享 → File Hero。分享窗口可新建文件夹并填写名称、描述，或通过系统目录选择器选择已有文件夹直接追加。已有文件夹保留原描述，统一更新 file-readme.txt；同名文件整批拒绝并可重新选择目标。主页自动恢复上次授权位置，不再提供 USB 和手动选文件按钮。
