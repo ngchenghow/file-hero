@@ -21,8 +21,7 @@ class MainActivity : FlutterActivity() {
     private var pending: MethodChannel.Result? = null
     private var pendingPath = ""
     private var pendingKind = ""
-    private var pendingBatchName = ""
-    private var pendingDescription = ""
+    private var selectedSources: List<Pair<Uri,String>> = emptyList()
     private var active = false
     private fun utc(millis: Long = System.currentTimeMillis()): String = if (millis <= 0) "unknown" else SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(millis))
     private fun valid(name: String) {
@@ -102,14 +101,12 @@ class MainActivity : FlutterActivity() {
         if(active) { result.error("BUSY", "文件操作仍在进行", null); return }
         active = true
         val path = call.argument<String>("path") ?: ""
-        if(call.method in listOf("connect", "import", "export")) {
+        if(call.method in listOf("connect", "pickFiles", "export")) {
             try {
                 pending = result; pendingKind = call.method; pendingPath = path
-                pendingBatchName = call.argument<String>("name") ?: ""
-                pendingDescription = call.argument<String>("description") ?: ""
                 val intent = when(call.method) {
                     "connect" -> Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    "import" -> { require(root != null) { "请先连接 SSD" }; valid(pendingBatchName); require(pendingDescription.toByteArray(Charsets.UTF_8).size <= 8192 && !pendingDescription.contains('\n') && !pendingDescription.contains('\r')); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
+                    "pickFiles" -> { selectedSources = emptyList(); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
                     else -> { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, path.substringAfterLast('/')) }
                 }
                 startActivityForResult(intent, 100)
@@ -123,6 +120,7 @@ class MainActivity : FlutterActivity() {
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
+                "importSelected" -> importSelected(file, call.argument<String>("name") ?: "", call.argument<String>("description") ?: "")
                 else -> error("Unknown method")
             }
         }
@@ -137,39 +135,47 @@ class MainActivity : FlutterActivity() {
         if(picked.isEmpty()) data?.data?.let { picked.add(it) }
         val uri = picked.firstOrNull()
         if(resultCode != Activity.RESULT_OK || uri == null) { active = false; result.success(null); return }
-        val kind = pendingKind; val path = pendingPath; val batchName = pendingBatchName; val description = pendingDescription
+        val kind = pendingKind; val path = pendingPath
         background(result) {
             when(kind) {
                 "connect" -> {
                     val flags = (data?.flags ?: 0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")
-                    require(selected.canRead()) { "无法读取文件夹" }; root = selected; selected.name ?: "USB SSD"
+                    require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected; selected.name ?: "USB SSD"
                 }
-                "import" -> {
-                    val parent = resolve(path); require(parent.isDirectory); valid(batchName)
-                    require(parent.findFile(batchName) == null) { "批次文件夹已存在" }
+                "pickFiles" -> {
                     val names = mutableSetOf<String>()
-                    val sources = picked.map { source ->
+                    val sources = picked.distinct().map { source ->
                         val name = contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取文件名")
-                        valid(name); require(!name.equals("file-readme.txt", true)) { "file-readme.txt 保留为批次说明文件" }
+                        valid(name); require(name.lowercase(Locale.ROOT) !in listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")) { "file-readme.txt 及其临时文件名保留给批次说明" }
                         require(names.add(name.lowercase(Locale.ROOT))) { "本批文件有重名，请分批存入" }; source to name
                     }
-                    val dest = parent.createDirectory(batchName) ?: error("无法创建批次文件夹")
-                    try {
-                        val batch = Batch(); batch.header["Description"] = description; batch.header["Last-Stored-UTC"] = utc()
-                        for((source, name) in sources) {
-                            val created = dest.createFile(contentResolver.getType(source) ?: "application/octet-stream", name) ?: error("无法创建文件")
-                            copy(source, created.uri); batch.files[created.name!!] = record(created, stored = true)
-                        }
-                        writeBatch(dest, batch)
-                    } catch(e: Exception) { dest.delete(); throw e }
-                    mapOf("batch" to batchName, "imported" to sources.size)
+                    selectedSources = sources
+                    sources.map { it.second }
                 }
                 "export" -> { val src = resolve(path); require(src.isFile); require(src.uri != uri) { "不能覆盖源文件" }; copy(src.uri, uri); true }
                 else -> error("Unknown result")
             }
         }
+    }
+    private fun importSelected(parent: DocumentFile, batchName: String, description: String): Map<String,Any> {
+        require(parent.isDirectory && parent.canWrite()) { "SSD 目标目录不可写" }; valid(batchName)
+        require(description.toByteArray(Charsets.UTF_8).size <= 8192 && !description.contains('\n') && !description.contains('\r')) { "描述最多 8192 UTF-8 字节" }
+        require(selectedSources.isNotEmpty()) { "请先选择文件" }
+        require(parent.findFile(batchName) == null) { "此文件夹已存在，请更换批次名称" }
+        val sources = selectedSources.toList()
+        val dest = parent.createDirectory(batchName) ?: error("无法在 SSD 创建文件夹")
+        try {
+            val batch = Batch(); batch.header["Description"] = description; batch.header["Last-Stored-UTC"] = utc()
+            for((source, name) in sources) {
+                val created = dest.createFile(contentResolver.getType(source) ?: "application/octet-stream", name) ?: error("无法创建文件")
+                copy(source, created.uri); batch.files[created.name!!] = record(created, stored = true)
+            }
+            writeBatch(dest, batch)
+        } catch(e: Exception) { dest.delete(); throw e }
+        selectedSources = emptyList()
+        return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size)
     }
     private fun copy(source: Uri, target: Uri) {
         contentResolver.openInputStream(source)?.use { input -> contentResolver.openOutputStream(target, "wt")?.use { output -> input.copyTo(output, 1024 * 1024) } ?: error("无法写入目标") } ?: error("无法读取源文件")

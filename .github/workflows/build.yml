@@ -52,6 +52,16 @@ jobs:
         with:
           channel: stable
           cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: file-hero-android-debug-signing-v1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-gradle-v1-${{ runner.os }}
       - run: node scripts/bootstrap-mobile.cjs
       - run: flutter pub get
         working-directory: mobile
