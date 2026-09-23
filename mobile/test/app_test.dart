@@ -63,5 +63,23 @@ void main() {
     expect(calls, ['pickFiles']);
     expect(find.text('已取消选择文件'), findsOneWidget);
   });
+  testWidgets('batch folder has a cover on the left and description on the right', (tester) async {
+    final thumbnails = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      if(call.method == 'connect') return 'SSD';
+      if(call.method == 'thumbnail') { thumbnails.add(call.arguments['path'] as String); return null; }
+      if(call.method == 'list') { return [{'name': '旅行批次', 'directory': true, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都旅行的照片和票据'}}]; }
+      return null;
+    });
+    await tester.pumpWidget(const FileHeroApp());
+    await tester.tap(find.byTooltip('选择 SSD / 文件夹'));
+    await advance(tester);
+    expect(find.text('京都旅行的照片和票据'), findsOneWidget);
+    expect(find.text('2 个文件 · 2.0 KB'), findsOneWidget);
+    expect(thumbnails, ['旅行批次']);
+    final cover = tester.getRect(find.byKey(const ValueKey('preview-旅行批次')));
+    final description = tester.getRect(find.text('京都旅行的照片和票据'));
+    expect(cover.right, lessThan(description.left));
+  });
 }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:typed_data';
 
 void main() => runApp(const FileHeroApp());
 
@@ -24,6 +25,7 @@ class _FilesPageState extends State<FilesPage> {
   bool connected = false, busy = false;
   String folder = '', driveName = '', query = '', message = '先选择文件，再选择 SSD 并新建文件夹存入。';
   List<Map<String, dynamic>> entries = [];
+  final Map<String, Future<Uint8List?>> thumbnails = {};
   String child(String name) => folder.isEmpty ? name : '$folder/$name';
   String size(int n) { if(n < 1024) return '$n B'; if(n < 1048576) return '${(n/1024).toStringAsFixed(1)} KB'; if(n < 1073741824) return '${(n/1048576).toStringAsFixed(1)} MB'; return '${(n/1073741824).toStringAsFixed(1)} GB'; }
   Future<dynamic> call(String method, [Map<String, dynamic> values = const {}]) => channel.invokeMethod(method, {'path': folder, ...values});
@@ -37,14 +39,10 @@ class _FilesPageState extends State<FilesPage> {
   Future<void> load([String? target]) async {
     final path = target ?? folder;
     final data = await call('list', {'path': path}) as List;
-    if(mounted) { setState(() { folder = path; entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; }); }
+    if(mounted) { setState(() { folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; }); }
   }
   Future<String?> textPrompt(String title, {String initial = ''}) async {
-    final controller = TextEditingController(text: initial);
-    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(title: Text(title), content: TextField(controller: controller, autofocus: true, maxLines: title == '文件描述' ? 4 : 1), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('保存'))]));
-    // Keep controller alive until the dialog exit animation completes.
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    controller.dispose(); return value;
+    return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
   }
   Future<void> importBatch() async {
     await work(() async {
@@ -90,6 +88,36 @@ class _FilesPageState extends State<FilesPage> {
       if(description != null) { await work(() async { await call('describe', {'path': child(file['name'] as String), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
     } else { await work(() async { final result = await call('export', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = result == true ? '已导出文件副本' : '已取消导出'); } }); }
   }
+  Widget preview(Map<String,dynamic> file) {
+    final name = file['name'] as String;
+    final directory = file['directory'] == true;
+    final icon = directory ? Icons.folder_outlined : name.toLowerCase().endsWith('.pdf') ? Icons.picture_as_pdf_outlined : Icons.description_outlined;
+    final fallback = Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 34, color: const Color(0xff528a67)), const SizedBox(height: 5), Text(directory ? '文件夹' : name.split('.').last.toUpperCase().characters.take(8).toString(), maxLines: 1, style: const TextStyle(fontSize: 10, color: Color(0xff6b8577)))]);
+    return Container(key: ValueKey('preview-$name'), width: 96, height: 96, clipBehavior: Clip.antiAlias, decoration: BoxDecoration(color: const Color(0xffeaf1ec), borderRadius: BorderRadius.circular(10)), child: FutureBuilder<Uint8List?>(
+      future: thumbnails.putIfAbsent(child(name), () async { try { return await channel.invokeMethod<Uint8List>('thumbnail', {'path': child(name)}); } catch(_) { return null; } }),
+      builder: (context, snapshot) => snapshot.data == null ? fallback : Image.memory(snapshot.data!, fit: BoxFit.contain, gaplessPlayback: true, errorBuilder: (context, error, stackTrace) => fallback),
+    ));
+  }
+  Widget fileRow(Map<String,dynamic> file) {
+    final directory = file['directory'] == true;
+    final metadata = Map<String,dynamic>.from(file['metadata'] as Map? ?? {});
+    final description = (metadata['Description'] as String? ?? '').trim();
+    return Card(margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5), elevation: 0, color: Colors.white, child: InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: busy ? null : () { if(directory) { work(() => load(child(file['name'] as String))); } else { detail(file); } },
+      child: Padding(padding: const EdgeInsets.all(12), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        preview(file), const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(file['name'] as String, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 7),
+          Text(description.isEmpty ? directory ? '暂无批次描述' : '暂无描述，点击添加' : description, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: description.isEmpty ? Colors.grey : const Color(0xff395345))),
+          const SizedBox(height: 9),
+          Text(directory ? '${file['fileCount'] ?? '—'} 个文件 · ${size((file['size'] as num).toInt())}' : size((file['size'] as num).toInt()), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          Text('日期：${(file['modified'] as String? ?? 'unknown').split('T').first}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+        ])),
+      ])),
+    ));
+  }
   @override
   Widget build(BuildContext context) {
     final visible = entries.where((e) => (e['name'] as String).toLowerCase().contains(query.toLowerCase())).toList();
@@ -100,7 +128,7 @@ class _FilesPageState extends State<FilesPage> {
           if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
         ])),
         if(busy) const LinearProgressIndicator(),
-        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('1. 选择要存入的文件（可多选）\n2. 选择 SSD 目标目录\n3. 新建批次文件夹并存入\n\n也可点击右上角 USB 图标浏览 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。选择文件并存入 SSD。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) { final f = visible[index]; final dir = f['directory'] == true; return ListTile(leading: Icon(dir ? Icons.folder_outlined : Icons.description_outlined, color: const Color(0xff528a67)), title: Text(f['name'] as String), subtitle: Text(dir ? '文件夹' : '${size((f['size'] as num).toInt())} · ${(f['metadata'] as Map).containsKey('Format') ? '已建档' : '待建档'}'), trailing: const Icon(Icons.chevron_right), onTap: busy ? null : () { if(dir) {work(() => load(child(f['name'] as String)));} else {detail(f);} }); })),
+        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('1. 选择要存入的文件（可多选）\n2. 选择 SSD 目标目录\n3. 新建批次文件夹并存入\n\n也可点击右上角 USB 图标浏览 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。选择文件并存入 SSD。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
         Padding(padding: const EdgeInsets.all(16), child: Text(message, style: const TextStyle(fontSize: 12), maxLines: 4)),
         SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(12,0,12,12), child: Wrap(spacing: 8, children: [
           FilledButton.icon(onPressed: busy ? null : importBatch, icon: const Icon(Icons.upload), label: const Text('选择文件并存入 SSD')),
@@ -111,3 +139,26 @@ class _FilesPageState extends State<FilesPage> {
     );
   }
 }
+
+class _TextPromptDialog extends StatefulWidget {
+  const _TextPromptDialog({required this.title, required this.initial});
+  final String title;
+  final String initial;
+  @override
+  State<_TextPromptDialog> createState() => _TextPromptDialogState();
+}
+
+class _TextPromptDialogState extends State<_TextPromptDialog> {
+  late final TextEditingController controller;
+  @override
+  void initState() { super.initState(); controller = TextEditingController(text: widget.initial); }
+  @override
+  void dispose() { controller.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.title),
+    content: TextField(controller: controller, autofocus: true, maxLines: widget.title.contains('描述') ? 4 : 1),
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('保存'))],
+  );
+}
+

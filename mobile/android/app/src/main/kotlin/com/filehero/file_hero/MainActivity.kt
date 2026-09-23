@@ -4,6 +4,12 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
+import android.media.MediaMetadataRetriever
+import android.os.Build
+import android.util.Size
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -14,10 +20,12 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.Executors
+import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
     private var root: DocumentFile? = null
     private val worker = Executors.newSingleThreadExecutor()
+    private val thumbnailWorker = Executors.newFixedThreadPool(2)
     private var pending: MethodChannel.Result? = null
     private var pendingPath = ""
     private var pendingKind = ""
@@ -28,8 +36,8 @@ class MainActivity : FlutterActivity() {
         val base = name.substringBefore('.').uppercase(Locale.ROOT)
         require(name.isNotEmpty() && name !in listOf(".", "..") && !name.equals(".file-hero", true) && name.none { it in "/\\\r\n\t:<>\"|?*" } && !name.endsWith('.') && !name.endsWith(' ') && base !in listOf("CON", "PRN", "AUX", "NUL") && !base.matches(Regex("(COM|LPT)[1-9]"))) { "Invalid or reserved portable filename" }
     }
-    private fun resolve(path: String): DocumentFile {
-        var file = root ?: error("请先连接 SSD")
+    private fun resolve(path: String, tree: DocumentFile? = root): DocumentFile {
+        var file = tree ?: error("请先连接 SSD")
         if (path.isNotEmpty()) for (part in path.split('/')) { valid(part); file = file.findFile(part) ?: error("文件不存在") }
         return file
     }
@@ -98,6 +106,14 @@ class MainActivity : FlutterActivity() {
         MethodChannel(engine.dartExecutor.binaryMessenger, "com.filehero/storage").setMethodCallHandler { call, result -> handle(call, result) }
     }
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
+        if(call.method == "thumbnail") {
+            val tree = root; val path = call.argument<String>("path") ?: ""
+            thumbnailWorker.execute {
+                val bytes = try { thumbnail(resolve(path, tree)) } catch(_: Exception) { null }
+                runOnUiThread { result.success(bytes) }
+            }
+            return
+        }
         if(active) { result.error("BUSY", "文件操作仍在进行", null); return }
         active = true
         val path = call.argument<String>("path") ?: ""
@@ -116,7 +132,13 @@ class MainActivity : FlutterActivity() {
         background(result) {
             val file = resolve(path)
             when(call.method) {
-                "list" -> { require(file.isDirectory && file.canRead()) { "无法读取文件夹" }; file.listFiles().filter { it.name != ".file-hero" }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name }).map { f -> mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to f.length(), "modified" to utc(f.lastModified()), "metadata" to if(f.isFile) readMeta(f) else emptyMap<String,String>()) } }
+                "list" -> {
+                    require(file.isDirectory && file.canRead()) { "无法读取文件夹" }
+                    file.listFiles().filter { it.name != ".file-hero" }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name }).map { f ->
+                        val meta = if(f.isDirectory) readBatch(f, false).header else if(f.isFile) readMeta(f) else emptyMap<String,String>()
+                        mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
+                    }
+                }
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
@@ -179,5 +201,55 @@ class MainActivity : FlutterActivity() {
     }
     private fun copy(source: Uri, target: Uri) {
         contentResolver.openInputStream(source)?.use { input -> contentResolver.openOutputStream(target, "wt")?.use { output -> input.copyTo(output, 1024 * 1024) } ?: error("无法写入目标") } ?: error("无法读取源文件")
+    }
+    private fun thumbnail(file: DocumentFile): ByteArray? {
+        if(file.isDirectory) {
+            // Batch cover: use the first available visual preview inside the folder.
+            val candidates = file.listFiles().filter { child -> child.isFile && child.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "pdf", "mp4", "mkv", "mov", "webm", "avi", "3gp") }.sortedBy { it.name }.take(8)
+            for(candidate in candidates) { val cover = try { thumbnail(candidate) } catch(_: Exception) { null }; if(cover != null) return cover }
+            return null
+        }
+        if(!file.isFile) return null
+        val uri = file.uri
+        var bitmap: Bitmap? = if(Build.VERSION.SDK_INT >= 29) {
+            try { contentResolver.loadThumbnail(uri, Size(256, 256), null) } catch(_: Exception) { null }
+        } else null
+        if(bitmap == null) {
+            val mime = contentResolver.getType(uri) ?: ""
+            val extension = file.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) ?: ""
+            bitmap = when {
+                mime.startsWith("image/") || extension in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic") -> {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                    var sample = 1
+                    while(bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+                    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                }
+                mime == "application/pdf" || extension == "pdf" -> {
+                    contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                        PdfRenderer(descriptor).use { renderer ->
+                            if(renderer.pageCount == 0) null else renderer.openPage(0).use { page ->
+                                val scale = 256.0 / maxOf(page.width, page.height)
+                                Bitmap.createBitmap(maxOf(1, (page.width * scale).toInt()), maxOf(1, (page.height * scale).toInt()), Bitmap.Config.ARGB_8888).also { preview ->
+                                    preview.eraseColor(android.graphics.Color.WHITE)
+                                    page.render(preview, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                }
+                            }
+                        }
+                    }
+                }
+                mime.startsWith("video/") || extension in listOf("mp4", "mkv", "mov", "webm", "avi", "3gp") -> {
+                    val retriever = MediaMetadataRetriever()
+                    try { retriever.setDataSource(this, uri); if(Build.VERSION.SDK_INT >= 27) retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 256, 256) else retriever.getFrameAtTime(0) } finally { retriever.release() }
+                }
+                else -> null
+            }
+        }
+        val source = bitmap ?: return null
+        val ratio = 256.0 / maxOf(source.width, source.height)
+        val scaled = if(ratio < 1) Bitmap.createScaledBitmap(source, maxOf(1, (source.width * ratio).toInt()), maxOf(1, (source.height * ratio).toInt()), true) else source
+        return try { ByteArrayOutputStream().use { output -> scaled.compress(Bitmap.CompressFormat.JPEG, 82, output); output.toByteArray() } }
+        finally { if(scaled !== source) scaled.recycle(); source.recycle() }
     }
 }
