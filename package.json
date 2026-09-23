@@ -1,0 +1,37 @@
+{
+  "name": "file-hero",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable SSD file manager with per-file readme metadata",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "build": "node scripts/build-native.cjs",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "dist": "npm run build && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.filehero.desktop",
+    "productName": "File Hero",
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/file-hero-core.exe",
+        "to": "file-hero-core.exe"
+      }
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  }
+}

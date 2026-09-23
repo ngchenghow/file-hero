@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+.dart_tool/
+.flutter-plugins*
+android/local.properties
+android/.gradle/
+android/gradle/
+android/gradlew*
+*.iml
+.idea/
+local.properties
+*.log
+tools/flutter/

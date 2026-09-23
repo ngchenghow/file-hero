@@ -1,0 +1,60 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+      - run: npm ci
+      - run: npm test
+        env:
+          CXX: D:/a/_temp/msys64/mingw64/bin/g++.exe
+      - run: npm run dist
+        env:
+          CXX: D:/a/_temp/msys64/mingw64/bin/g++.exe
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-hero-windows-portable
+          path: dist/*.exe
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: node scripts/bootstrap-mobile.cjs
+      - run: flutter pub get
+        working-directory: mobile
+      - run: dart format lib test
+        working-directory: mobile
+      - run: flutter analyze
+        working-directory: mobile
+      - run: flutter test
+        working-directory: mobile
+      - run: flutter build apk --debug
+        working-directory: mobile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-hero-android-debug
+          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
