@@ -21,43 +21,74 @@ class MainActivity : FlutterActivity() {
     private var pending: MethodChannel.Result? = null
     private var pendingPath = ""
     private var pendingKind = ""
+    private var pendingBatchName = ""
+    private var pendingDescription = ""
     private var active = false
     private fun utc(millis: Long = System.currentTimeMillis()): String = if (millis <= 0) "unknown" else SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(millis))
-    private fun valid(name: String) { require(name.isNotEmpty() && name !in listOf(".", "..", ".file-hero") && name.none { it in "/\\\r\n\t" }) { "Invalid or reserved name" } }
+    private fun valid(name: String) {
+        val base = name.substringBefore('.').uppercase(Locale.ROOT)
+        require(name.isNotEmpty() && name !in listOf(".", "..") && !name.equals(".file-hero", true) && name.none { it in "/\\\r\n\t:<>\"|?*" } && !name.endsWith('.') && !name.endsWith(' ') && base !in listOf("CON", "PRN", "AUX", "NUL") && !base.matches(Regex("(COM|LPT)[1-9]"))) { "Invalid or reserved portable filename" }
+    }
     private fun resolve(path: String): DocumentFile {
         var file = root ?: error("请先连接 SSD")
         if (path.isNotEmpty()) for (part in path.split('/')) { valid(part); file = file.findFile(part) ?: error("文件不存在") }
         return file
     }
-    private fun metadata(file: DocumentFile): DocumentFile? = file.parentFile?.findFile(".file-hero")?.findFile(file.name ?: error("Missing filename"))?.findFile("file-readme.txt")
-    private fun readMeta(file: DocumentFile): MutableMap<String, String> {
-        val doc = metadata(file) ?: return mutableMapOf()
-        val text = contentResolver.openInputStream(doc.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("无法读取说明")
-        return text.lineSequence().mapNotNull { val at = it.indexOf(": "); if(at < 0) null else it.substring(0, at) to it.substring(at + 2).trimEnd('\r') }.toMap().toMutableMap()
-    }
-    private fun writeMeta(file: DocumentFile, description: String? = null, stored: Boolean = false): Map<String, String> {
-        val meta = readMeta(file)
-        if(description != null) { require(description.toByteArray(Charsets.UTF_8).size <= 8192 && !description.contains('\n') && !description.contains('\r')) { "描述最多 8192 UTF-8 字节，且必须为单行" }; meta["Description"] = description }
-        meta.putIfAbsent("Description", ""); meta["Format"] = "file-hero/v1"; meta["Name"] = file.name!!
-        meta["Size-Bytes"] = file.length().toString(); meta["Modified-UTC"] = utc(file.lastModified())
-        meta.putIfAbsent("First-Indexed-UTC", utc()); meta.putIfAbsent("Last-Stored-UTC", "unknown")
-        if(stored) meta["Last-Stored-UTC"] = utc()
-        val parent = file.parentFile ?: error("Missing parent")
-        val base = parent.findFile(".file-hero") ?: parent.createDirectory(".file-hero") ?: error("无法创建说明目录")
-        val dir = base.findFile(file.name!!) ?: base.createDirectory(file.name!!) ?: error("无法创建文件说明目录")
-        val doc = dir.findFile("file-readme.txt") ?: dir.createFile("text/plain", "file-readme.txt") ?: error("无法创建说明文件")
-        // SAF providers do not guarantee atomic rename/replace. Keep the previous text as a backup.
-        val previous = contentResolver.openInputStream(doc.uri)?.use { it.readBytes() } ?: byteArrayOf()
-        if(previous.isNotEmpty()) {
-            val backup = dir.findFile("file-readme.backup.txt") ?: dir.createFile("text/plain", "file-readme.backup.txt") ?: error("无法备份说明")
-            contentResolver.openOutputStream(backup.uri, "wt")?.use { it.write(previous) } ?: error("无法写入说明备份")
+    private data class Batch(val header: MutableMap<String,String> = mutableMapOf(), val files: MutableMap<String,MutableMap<String,String>> = mutableMapOf())
+    private fun readBatch(dir: DocumentFile, strict: Boolean = true): Batch {
+        val doc = dir.findFile("file-readme.txt") ?: return Batch()
+        val text = contentResolver.openInputStream(doc.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("无法读取批次说明")
+        val batch = Batch(); var current = batch.header
+        for(raw in text.lineSequence()) {
+            val line = raw.trimEnd('\r')
+            if(line.startsWith("[File: ") && line.endsWith(']')) { val name = line.substring(7, line.length - 1); valid(name); current = batch.files.getOrPut(name) { mutableMapOf() } }
+            else { val at = line.indexOf(": "); if(at >= 0) current[line.substring(0, at)] = line.substring(at + 2) }
         }
-        contentResolver.openOutputStream(doc.uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { out -> meta.toSortedMap().forEach { (key, value) -> out.write("$key: $value\n") } } ?: error("无法写入说明")
+        if(batch.header["Format"] != "file-hero/batch-v1") { require(!strict) { "已有 file-readme.txt 不是 File Hero 批次说明，不会覆盖" }; return Batch() }
+        return batch
+    }
+    private fun record(file: DocumentFile, meta: MutableMap<String,String> = mutableMapOf(), stored: Boolean = false): MutableMap<String,String> {
+        meta.putIfAbsent("Description", ""); meta["Name"] = file.name!!; meta["Size-Bytes"] = file.length().toString(); meta["Modified-UTC"] = utc(file.lastModified())
+        meta.putIfAbsent("First-Indexed-UTC", utc()); meta.putIfAbsent("Last-Stored-UTC", "unknown"); if(stored) meta["Last-Stored-UTC"] = utc()
         return meta
     }
+    private fun writeBatch(dir: DocumentFile, batch: Batch) {
+        val h = batch.header; h["Format"] = "file-hero/batch-v1"; h["Batch"] = dir.name ?: "SSD"
+        h.putIfAbsent("Description", ""); h.putIfAbsent("Created-UTC", utc()); h.putIfAbsent("Last-Stored-UTC", "unknown")
+        h["File-Count"] = batch.files.size.toString(); h["Size-Bytes"] = batch.files.values.sumOf { it["Size-Bytes"]?.toLongOrNull() ?: 0L }.toString()
+        val text = buildString {
+            h.toSortedMap().forEach { (key,value) -> append("$key: $value\n") }
+            batch.files.toSortedMap().forEach { (name, fields) -> append("\n[File: $name]\n"); fields.toSortedMap().forEach { (key,value) -> append("$key: $value\n") } }
+        }
+        require(dir.findFile("file-readme.txt.tmp") == null && dir.findFile("file-readme.txt.backup") == null) { "存在未完成写入的说明文件，请先恢复" }
+        val temp = dir.createFile("application/octet-stream", "file-readme.txt.tmp") ?: error("无法创建临时说明")
+        val old = dir.findFile("file-readme.txt")
+        var renamed = false
+        try {
+            contentResolver.openOutputStream(temp.uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) } ?: error("无法写入批次说明")
+            if(old != null) { require(old.renameTo("file-readme.txt.backup")) { "此存储设备不支持安全替换说明" }; renamed = true }
+            require(temp.renameTo("file-readme.txt")) { "无法提交批次说明" }
+        } catch(e: Exception) { temp.delete(); if(renamed) old?.renameTo("file-readme.txt"); throw e }
+        if(old != null) require(old.delete()) { "说明已保存，但临时备份未能删除" }
+    }
+    private fun readMeta(file: DocumentFile): Map<String,String> {
+        val batch = readBatch(file.parentFile ?: error("Missing parent"), false)
+        val meta = if(file.name.equals("file-readme.txt", true)) batch.header else batch.files[file.name] ?: mutableMapOf()
+        return if(meta.isEmpty()) meta else meta + ("Format" to "file-hero/batch-v1")
+    }
+    private fun writeMeta(file: DocumentFile, description: String): Map<String,String> {
+        require(description.toByteArray(Charsets.UTF_8).size <= 8192 && !description.contains('\n') && !description.contains('\r')) { "描述最多 8192 UTF-8 字节，且必须为单行" }
+        val parent = file.parentFile ?: error("Missing parent"); val batch = readBatch(parent)
+        val meta = if(file.name.equals("file-readme.txt", true)) batch.header else record(file, batch.files.getOrPut(file.name!!) { mutableMapOf() })
+        meta["Description"] = description; writeBatch(parent, batch); return meta
+    }
     private fun index(dir: DocumentFile): Int {
-        var n = 0
-        for(file in dir.listFiles()) if(file.name != ".file-hero") { if(file.isDirectory) n += index(file) else if(file.isFile) { writeMeta(file); n++ } }
+        var n = 0; val batch = readBatch(dir); val previous = batch.files.toMap(); batch.files.clear()
+        for(file in dir.listFiles()) if(file.name != ".file-hero") {
+            if(file.isDirectory) n += index(file)
+            else if(file.isFile && !file.name.equals("file-readme.txt", true) && file.name !in listOf("file-readme.txt.tmp", "file-readme.txt.backup")) { batch.files[file.name!!] = record(file, previous[file.name] ?: mutableMapOf()); n++ }
+        }
+        if(batch.files.isNotEmpty() || batch.header.isNotEmpty()) writeBatch(dir, batch)
         return n
     }
     private fun background(result: MethodChannel.Result, fn: () -> Any?) {
@@ -74,9 +105,11 @@ class MainActivity : FlutterActivity() {
         if(call.method in listOf("connect", "import", "export")) {
             try {
                 pending = result; pendingKind = call.method; pendingPath = path
+                pendingBatchName = call.argument<String>("name") ?: ""
+                pendingDescription = call.argument<String>("description") ?: ""
                 val intent = when(call.method) {
                     "connect" -> Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    "import" -> { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*") }
+                    "import" -> { require(root != null) { "请先连接 SSD" }; valid(pendingBatchName); require(pendingDescription.toByteArray(Charsets.UTF_8).size <= 8192 && !pendingDescription.contains('\n') && !pendingDescription.contains('\r')); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
                     else -> { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, path.substringAfterLast('/')) }
                 }
                 startActivityForResult(intent, 100)
@@ -99,9 +132,12 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if(requestCode != 100) return
         val result = pending ?: return; pending = null
-        val uri = data?.data
+        val picked = mutableListOf<Uri>()
+        data?.clipData?.let { clip -> for(i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri) }
+        if(picked.isEmpty()) data?.data?.let { picked.add(it) }
+        val uri = picked.firstOrNull()
         if(resultCode != Activity.RESULT_OK || uri == null) { active = false; result.success(null); return }
-        val kind = pendingKind; val path = pendingPath
+        val kind = pendingKind; val path = pendingPath; val batchName = pendingBatchName; val description = pendingDescription
         background(result) {
             when(kind) {
                 "connect" -> {
@@ -111,11 +147,24 @@ class MainActivity : FlutterActivity() {
                     require(selected.canRead()) { "无法读取文件夹" }; root = selected; selected.name ?: "USB SSD"
                 }
                 "import" -> {
-                    val dest = resolve(path); require(dest.isDirectory)
-                    val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取文件名")
-                    valid(name); require(dest.findFile(name) == null) { "文件已存在；导入不会覆盖" }
-                    val created = dest.createFile(contentResolver.getType(uri) ?: "application/octet-stream", name) ?: error("无法创建文件")
-                    try { copy(uri, created.uri); writeMeta(created, stored = true) } catch(e: Exception) { created.delete(); throw e }; true
+                    val parent = resolve(path); require(parent.isDirectory); valid(batchName)
+                    require(parent.findFile(batchName) == null) { "批次文件夹已存在" }
+                    val names = mutableSetOf<String>()
+                    val sources = picked.map { source ->
+                        val name = contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取文件名")
+                        valid(name); require(!name.equals("file-readme.txt", true)) { "file-readme.txt 保留为批次说明文件" }
+                        require(names.add(name.lowercase(Locale.ROOT))) { "本批文件有重名，请分批存入" }; source to name
+                    }
+                    val dest = parent.createDirectory(batchName) ?: error("无法创建批次文件夹")
+                    try {
+                        val batch = Batch(); batch.header["Description"] = description; batch.header["Last-Stored-UTC"] = utc()
+                        for((source, name) in sources) {
+                            val created = dest.createFile(contentResolver.getType(source) ?: "application/octet-stream", name) ?: error("无法创建文件")
+                            copy(source, created.uri); batch.files[created.name!!] = record(created, stored = true)
+                        }
+                        writeBatch(dest, batch)
+                    } catch(e: Exception) { dest.delete(); throw e }
+                    mapOf("batch" to batchName, "imported" to sources.size)
                 }
                 "export" -> { val src = resolve(path); require(src.isFile); require(src.uri != uri) { "不能覆盖源文件" }; copy(src.uri, uri); true }
                 else -> error("Unknown result")

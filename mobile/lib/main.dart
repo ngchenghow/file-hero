@@ -46,6 +46,17 @@ class _FilesPageState extends State<FilesPage> {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     controller.dispose(); return value;
   }
+  Future<void> importBatch() async {
+    final name = await textPrompt('批次文件夹名称', initial: '批次-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').split('.').first}');
+    if(name == null || !mounted) return;
+    final description = await textPrompt('本批文件的描述');
+    if(description == null || !mounted) return;
+    await work(() async {
+      final result = await call('import', {'name': name.trim(), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')});
+      await load();
+      if(mounted) { setState(() => message = result == null ? '已取消存入' : '已存入批次「${result['batch']}」：${result['imported']} 个文件，附带 file-readme.txt'); }
+    });
+  }
   Future<void> detail(Map<String,dynamic> file) async {
     final meta = Map<String,dynamic>.from(file['metadata'] as Map? ?? {});
     final action = await showModalBottomSheet<String>(context: context, isScrollControlled: true, builder: (context) => SafeArea(child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -53,7 +64,7 @@ class _FilesPageState extends State<FilesPage> {
       Text('容量：${size((file['size'] as num).toInt())}\n修改日期：${file['modified']}\n首次建档：${meta['First-Indexed-UTC'] ?? '尚未建档'}\n上一次存入：${meta['Last-Stored-UTC'] == 'unknown' ? '未知' : meta['Last-Stored-UTC'] ?? '未知'}'), const SizedBox(height: 20), Text((meta['Description'] as String?)?.isNotEmpty == true ? meta['Description'] as String : '尚未填写文件描述'), const SizedBox(height: 20),
       FilledButton.icon(onPressed: () => Navigator.pop(context, 'describe'), icon: const Icon(Icons.edit_outlined), label: const Text('编辑说明')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'export'), icon: const Icon(Icons.download_outlined), label: const Text('导出文件副本')),
-      const Text('说明位置：.file-hero / 文件名 / file-readme.txt', style: TextStyle(fontSize: 11, color: Colors.grey)),
+      const Text('本批所有文件的描述统一保存在当前文件夹的 file-readme.txt。', style: TextStyle(fontSize: 11, color: Colors.grey)),
     ])))));
     if(!mounted || action == null) return;
     if(action == 'describe') {
@@ -74,8 +85,8 @@ class _FilesPageState extends State<FilesPage> {
         Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('点击右上角 USB 图标连接设备。\n支持系统文件选择器可访问的 USB SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。导入一份，开始整理。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) { final f = visible[index]; final dir = f['directory'] == true; return ListTile(leading: Icon(dir ? Icons.folder_outlined : Icons.description_outlined, color: const Color(0xff528a67)), title: Text(f['name'] as String), subtitle: Text(dir ? '文件夹' : '${size((f['size'] as num).toInt())} · ${(f['metadata'] as Map).containsKey('Format') ? '已建档' : '待建档'}'), trailing: const Icon(Icons.chevron_right), onTap: busy ? null : () { if(dir) {work(() => load(child(f['name'] as String)));} else {detail(f);} }); })),
         Padding(padding: const EdgeInsets.all(16), child: Text(message, style: const TextStyle(fontSize: 12), maxLines: 4)),
         if(connected) SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(12,0,12,12), child: Wrap(spacing: 8, children: [
-          FilledButton.icon(onPressed: busy ? null : () => work(() async { await call('import'); await load(); }), icon: const Icon(Icons.upload), label: const Text('导入')),
-          OutlinedButton(onPressed: busy ? null : () => work(() async { final n = await call('index'); await load(); setState(() => message = '已更新 $n 份说明'); }), child: const Text('生成说明')),
+          FilledButton.icon(onPressed: busy ? null : importBatch, icon: const Icon(Icons.upload), label: const Text('新批次存入')),
+          OutlinedButton(onPressed: busy ? null : () => work(() async { final n = await call('index'); await load(); setState(() => message = '已将 $n 个文件的信息更新到各文件夹的 file-readme.txt'); }), child: const Text('更新说明')),
           TextButton(onPressed: busy ? null : () async { final name = await textPrompt('新建文件夹'); if(name != null) { await work(() async { await call('mkdir', {'name': name.trim()}); await load(); }); } }, child: const Text('＋ 文件夹')),
         ]))),
       ]),
