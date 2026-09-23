@@ -73,8 +73,9 @@ void main() {
     shared = true; cancelPicker = true;
     tester.binding.channelBuffers.push(channel.name, const StandardMethodCodec().encodeMethodCall(const MethodCall('shareAvailable')), (_) {});
     await advance(tester);
-    await tester.tap(find.text('选择存放位置')); await advance(tester);
-    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, '存入')).onPressed, isNull);
+    expect(find.text('选择存放位置'), findsNothing);
+    await tester.tap(find.text('存入')); await advance(tester);
+    expect(calls.where((c) => c.method == 'connect').length, 1);
     await tester.tap(find.text('取消')); await advance(tester);
     expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
   });
@@ -124,6 +125,21 @@ void main() {
     await tester.tap(find.text('永久删除')); await advance(tester);
     expect(find.text('旅行批次'), findsOneWidget);
     expect(find.text('删除未完成：设备拒绝删除'), findsOneWidget);
+  });
+
+  testWidgets('new mode restores root after choosing existing folder', (tester) async {
+    target = 'SSD 根目录'; shared = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('已有文件夹')); await advance(tester);
+    await tester.tap(find.text('选择已有文件夹')); await advance(tester);
+    expect(calls.lastWhere((c) => c.method == 'connect').arguments['existing'], true);
+    await tester.tap(find.text('新建文件夹')); await advance(tester);
+    expect(find.text('选择存放位置'), findsNothing);
+    await tester.tap(find.text('存入')); await advance(tester);
+    final index = calls.indexWhere((c) => c.method == 'importSelected');
+    expect(calls[index - 1].method, 'restoreTarget');
+    expect(calls[index].arguments['path'], '');
+    expect(calls[index].arguments['existing'], false);
   });
 
 }

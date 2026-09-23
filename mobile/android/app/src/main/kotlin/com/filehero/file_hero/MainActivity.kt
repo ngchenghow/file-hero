@@ -30,6 +30,7 @@ class MainActivity : FlutterActivity() {
     private var pending: MethodChannel.Result? = null
     private var pendingPath = ""
     private var pendingKind = ""
+    private var selectingExisting = false
     private var selectedSources: List<Pair<Uri,String>> = emptyList()
     private var storageChannel: MethodChannel? = null
     private val sharedBatches = java.util.ArrayDeque<List<Uri>>()
@@ -162,7 +163,7 @@ class MainActivity : FlutterActivity() {
             background(result) {
                 try {
                     val saved = getPreferences(MODE_PRIVATE).getString("ssdTarget", null)
-                    val candidate = root ?: saved?.let { DocumentFile.fromTreeUri(this, Uri.parse(it)) }
+                    val candidate = saved?.let { DocumentFile.fromTreeUri(this, Uri.parse(it)) }
                     if(candidate != null && candidate.canRead() && candidate.canWrite()) { root = candidate; candidate.name ?: "SSD" } else null
                 } catch(_: Exception) { root = null; null }
             }
@@ -172,6 +173,7 @@ class MainActivity : FlutterActivity() {
         if(call.method in listOf("connect", "pickFiles", "export")) {
             try {
                 pending = result; pendingKind = call.method; pendingPath = path
+                selectingExisting = call.argument<Boolean>("existing") ?: false
                 val intent = when(call.method) {
                     "connect" -> Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                     "pickFiles" -> { selectedSources = emptyList(); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
@@ -218,7 +220,7 @@ class MainActivity : FlutterActivity() {
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")
                     require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected
-                    getPreferences(MODE_PRIVATE).edit().putString("ssdTarget", uri.toString()).apply()
+                    if(!selectingExisting) getPreferences(MODE_PRIVATE).edit().putString("ssdTarget", uri.toString()).apply()
                     selected.name ?: "USB SSD"
                 }
                 "pickFiles" -> {

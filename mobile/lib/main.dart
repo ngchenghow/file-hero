@@ -77,13 +77,23 @@ class _FilesPageState extends State<FilesPage> {
       name = form['name']!; description = form['description']!; mode = form['mode']!;
       existingReady = form['existingReady'] == 'true';
       if(form['action'] == 'target') {
-        final changed = await call('connect') as String?;
+        final changed = await call('connect', {'existing': mode == 'existing'}) as String?;
         if(!mounted) return;
         if(changed != null) {
           existingReady = mode == 'existing';
           setState(() { connected = true; driveName = changed; folder = ''; entries = []; });
         }
         continue;
+      }
+      if(mode == 'new') {
+        final rootTarget = await call('restoreTarget') as String?;
+        if(!mounted) return;
+        if(rootTarget == null) {
+          final authorized = await call('connect', {'existing': false}) as String?;
+          if(!mounted) return;
+          if(authorized == null) { continue; }
+          setState(() { connected = true; driveName = authorized; });
+        } else { setState(() { connected = true; driveName = rootTarget; }); }
       }
       setState(() => message = '正在存入 ${picked.length} 个文件，请勿拔盘…');
       dynamic result;
@@ -230,14 +240,14 @@ class _ShareSaveDialogState extends State<_ShareSaveDialog> {
       Text('已接收 ${widget.count} 个文件'), const SizedBox(height: 12),
       Wrap(spacing: 8, children: [ChoiceChip(label: const Text('新建文件夹'), selected: mode == 'new', onSelected: (_) => selectMode('new')), ChoiceChip(label: const Text('已有文件夹'), selected: mode == 'existing', onSelected: (_) => selectMode('existing'))]),
       const SizedBox(height: 12),
-      Text(mode == 'existing' && !existingReady ? '请选择要存入的已有文件夹' : widget.target.isEmpty ? '请选择 SSD 存放位置' : '目标：${widget.target}'),
-      TextButton.icon(onPressed: () => finish('target'), icon: const Icon(Icons.folder_open), label: Text(mode == 'existing' ? '选择已有文件夹' : '选择存放位置')),
+      Text(mode == 'new' ? '新文件夹将直接建立在 SSD 根目录。首次存入时需授权根目录。' : !existingReady ? '请选择要存入的已有文件夹' : '目标：${widget.target}'),
+      if(mode == 'existing') TextButton.icon(onPressed: () => finish('target'), icon: const Icon(Icons.folder_open), label: const Text('选择已有文件夹')),
       if(mode == 'new') ...[
         TextFormField(key: const ValueKey('share-name'), controller: name, decoration: const InputDecoration(labelText: '文件夹名称'), validator: (value) => value == null || value.trim().isEmpty ? '请输入文件夹名称' : null), const SizedBox(height: 12),
         TextFormField(key: const ValueKey('share-description'), controller: description, maxLines: 3, decoration: const InputDecoration(labelText: '描述（可选）')),
       ] else const Text('文件将直接存入所选文件夹，保留原有描述。同名文件不会覆盖。', style: TextStyle(fontSize: 12)),
     ]))),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: (mode == 'existing' ? existingReady : widget.target.isNotEmpty) ? () => finish('save') : null, child: const Text('存入'))],
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: (mode == 'existing' ? existingReady : true) ? () => finish('save') : null, child: const Text('存入'))],
   );
 }
 
