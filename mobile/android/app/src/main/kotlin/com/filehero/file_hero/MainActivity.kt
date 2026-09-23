@@ -162,7 +162,7 @@ class MainActivity : FlutterActivity() {
         if(call.method == "restoreTarget") {
             background(result) {
                 try {
-                    val saved = getPreferences(MODE_PRIVATE).getString("ssdTarget", null)
+                    val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)
                     val candidate = saved?.let { DocumentFile.fromTreeUri(this, Uri.parse(it)) }
                     if(candidate != null && candidate.canRead() && candidate.canWrite()) { root = candidate; candidate.name ?: "SSD" } else null
                 } catch(_: Exception) { root = null; null }
@@ -220,7 +220,7 @@ class MainActivity : FlutterActivity() {
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")
                     require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected
-                    if(!selectingExisting) getPreferences(MODE_PRIVATE).edit().putString("ssdTarget", uri.toString()).apply()
+                    if(!selectingExisting) getPreferences(MODE_PRIVATE).edit().putString("ssdRoot", uri.toString()).apply()
                     selected.name ?: "USB SSD"
                 }
                 "pickFiles" -> {
