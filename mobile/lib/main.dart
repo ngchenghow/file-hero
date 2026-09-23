@@ -120,6 +120,23 @@ class _FilesPageState extends State<FilesPage> {
   Future<String?> textPrompt(String title, {String initial = ''}) async {
     return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
   }
+  Future<void> deleteEntry(Map<String,dynamic> file) async {
+    final name = file['name'] as String;
+    final path = child(name);
+    final directory = file['directory'] == true;
+    await work(() async {
+      final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+        title: Text(directory ? '删除文件夹？' : '删除文件？'),
+        content: Text('「$name」\n\n${directory ? '此文件夹及其中所有文件和子文件夹都会永久删除。' : '此文件将永久删除。'}此操作无法撤销。${name.toLowerCase() == 'file-readme.txt' ? '\n删除说明文件会丢失本批描述和历史记录。' : ''}'),
+        actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error), onPressed: () => Navigator.pop(context, true), child: const Text('永久删除'))],
+      ));
+      if(!mounted) return;
+      if(confirmed != true) { setState(() => message = '已取消删除'); return; }
+      final result = await call('delete', {'path': path, 'directory': directory});
+      await load();
+      if(mounted) { setState(() => message = result['deleted'] == true ? '已删除「$name」。${result['warning'] ?? ''}' : '删除未完成：${result['warning']}'); }
+    });
+  }
   Future<void> detail(Map<String,dynamic> file) async {
     final meta = Map<String,dynamic>.from(file['metadata'] as Map? ?? {});
     final action = await showModalBottomSheet<String>(context: context, isScrollControlled: true, builder: (context) => SafeArea(child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -162,6 +179,7 @@ class _FilesPageState extends State<FilesPage> {
           Text(directory ? '${file['fileCount'] ?? '—'} 个文件 · ${size((file['size'] as num).toInt())}' : size((file['size'] as num).toInt()), style: const TextStyle(fontSize: 11, color: Colors.grey)),
           Text('日期：${(file['modified'] as String? ?? 'unknown').split('T').first}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
         ])),
+        IconButton(tooltip: '删除 ${file['name']}', onPressed: busy ? null : () => deleteEntry(file), icon: const Icon(Icons.delete_outline), color: Theme.of(context).colorScheme.error),
       ])),
     ));
   }

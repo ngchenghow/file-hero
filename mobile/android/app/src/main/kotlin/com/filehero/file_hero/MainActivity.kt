@@ -191,6 +191,7 @@ class MainActivity : FlutterActivity() {
                         mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
                     }
                 }
+                "delete" -> deleteEntry(path, file, call.argument<Boolean>("directory") ?: error("缺少类型"))
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
@@ -229,6 +230,25 @@ class MainActivity : FlutterActivity() {
                 else -> error("Unknown result")
             }
         }
+    }
+    private fun deleteEntry(path: String, file: DocumentFile, directory: Boolean): Map<String,Any> {
+        require(path.isNotEmpty() && file.uri != root?.uri) { "不能删除授权根目录" }
+        require(file.exists() && file.isDirectory == directory) { "项目类型已改变，请刷新后重试" }
+        require(file.canWrite()) { "没有删除此项目的权限" }
+        val parent = file.parentFile ?: error("无法读取父文件夹")
+        val name = file.name ?: error("无法读取文件名")
+        // Read metadata before destructive work; do not overwrite unrelated readmes.
+        val batch = if(!directory && !name.equals("file-readme.txt", true) && parent.findFile("file-readme.txt") != null) readBatch(parent) else null
+        if(batch != null) require(parent.findFile("file-readme.txt.tmp") == null && parent.findFile("file-readme.txt.backup") == null) { "请先恢复未完成写入的说明文件" }
+        val deleted = file.delete()
+        if(!deleted) return mapOf("deleted" to false, "warning" to "存储设备拒绝删除或仅删除了部分内容，请检查剩余项目")
+        var warning = ""
+        if(batch != null) {
+            batch.files.remove(name)
+            try { writeBatch(parent, batch) }
+            catch(e: Exception) { warning = "文件已删除，但说明未完整更新：${e.message}" }
+        }
+        return mapOf("deleted" to true, "warning" to warning)
     }
     private fun importSelected(parent: DocumentFile, batchName: String, description: String, existing: Boolean): Map<String,Any> {
         require(parent.isDirectory && parent.canWrite()) { "SSD 目标目录不可写" }

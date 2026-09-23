@@ -86,10 +86,12 @@ Windows CI 可手动运行「Build and test」，选择 `all`。桌面和 Androi
 
 ## 当前范围
 
-第一版提供浏览、按批次导入、导出副本、新建目录、统一说明编辑。尚不提供删除、移动、重命名、跨设备联网同步、自动监听和断点续传。外部更名后使用「更新说明」刷新清单；旧文件名对应的描述不会自动匹配到新文件名。请勿多个程序同时写同一批次。所有内容本地保存。
+第一版提供浏览、按批次导入、导出副本、新建目录、统一说明编辑。桌面暂不提供删除；尚不提供移动、重命名、跨设备联网同步、自动监听和断点续传。外部更名后使用「更新说明」刷新清单；旧文件名对应的描述不会自动匹配到新文件名。请勿多个程序同时写同一批次。所有内容本地保存。
 
 结构：`native/` C++ 引擎；`desktop/` Electron；`mobile/` Flutter 与 Kotlin；`scripts/` 构建；`tests/` 引擎测试。
 
 实现参考：[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter 平台通道](https://docs.flutter.dev/platform-integration/platform-channels)、[Electron 安全说明](https://www.electronjs.org/docs/latest/tutorial/security)。
 
 Android v0.1.3：入口改为系统分享 → File Hero。分享窗口可新建文件夹并填写名称、描述，或通过系统目录选择器选择已有文件夹直接追加。已有文件夹保留原描述，统一更新 file-readme.txt；同名文件整批拒绝并可重新选择目标。主页自动恢复上次授权位置，不再提供 USB 和手动选文件按钮。
+
+Android v0.1.4：文件／文件夹卡片右侧点击删除图标，再确认永久删除。文件夹连同全部内容删除；单个文件删除后更新统一说明中的清单、数量与总容量，保留批次描述及存入日期。授权根目录不可删除。

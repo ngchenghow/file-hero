@@ -10,10 +10,10 @@ void main() {
   const channel = MethodChannel('com.filehero/storage');
   TestWidgetsFlutterBinding.ensureInitialized();
   late List<MethodCall> calls;
-  late bool shared, fail, cancelPicker;
+  late bool shared, fail, cancelPicker, deleted, fileMode, deleteFails;
   String? target;
   setUp(() {
-    calls = []; shared = false; fail = false; cancelPicker = false; target = null;
+    deleted = false; fileMode = false; deleteFails = false; calls = []; shared = false; fail = false; cancelPicker = false; target = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       switch(call.method) {
@@ -23,7 +23,10 @@ void main() {
         case 'importSelected':
           if(fail) { fail = false; throw PlatformException(code: 'ERROR', message: '已有同名文件'); }
           return {'batch': '旅行资料', 'imported': 1, 'path': call.arguments['existing'] == true ? '' : '旅行资料', 'warning': ''};
-        case 'list': return [{'name': '旅行批次', 'directory': true, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
+        case 'delete':
+          if(deleteFails) { return {'deleted': false, 'warning': '设备拒绝删除'}; }
+          deleted = true; return {'deleted': true, 'warning': ''};
+        case 'list': if(deleted) return <Object>[]; return [{'name': fileMode ? 'photo.jpg' : '旅行批次', 'directory': !fileMode, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
         case 'thumbnail': return null;
         default: throw PlatformException(code: 'UNEXPECTED', message: call.method);
       }
@@ -86,4 +89,41 @@ void main() {
     expect(calls.where((c) => c.method == 'importSelected').length, 2);
     expect(find.textContaining('已存入「旅行资料」'), findsOneWidget);
   });
+  testWidgets('cancel delete never sends destructive request', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('删除 旅行批次')); await advance(tester);
+    expect(find.textContaining('所有文件和子文件夹'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'delete'), isEmpty);
+    await tester.tap(find.text('取消')); await advance(tester);
+    expect(calls.where((c) => c.method == 'delete'), isEmpty);
+    expect(find.text('旅行批次'), findsOneWidget);
+  });
+  testWidgets('confirmed folder deletion sends exact path and refreshes', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('删除 旅行批次')); await advance(tester);
+    await tester.tap(find.text('永久删除')); await advance(tester);
+    final data = calls.singleWhere((c) => c.method == 'delete').arguments;
+    expect(data['path'], '旅行批次'); expect(data['directory'], true);
+    expect(find.text('旅行批次'), findsNothing);
+    expect(find.textContaining('已删除「旅行批次」'), findsOneWidget);
+  });
+  testWidgets('file deletion uses file type and confirmation', (tester) async {
+    target = 'SSD'; fileMode = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('删除 photo.jpg')); await advance(tester);
+    expect(find.text('删除文件？'), findsOneWidget);
+    await tester.tap(find.text('永久删除')); await advance(tester);
+    final data = calls.singleWhere((c) => c.method == 'delete').arguments;
+    expect(data['path'], 'photo.jpg'); expect(data['directory'], false);
+    expect(find.text('photo.jpg'), findsNothing);
+  });
+  testWidgets('failed deletion retains item and reports failure', (tester) async {
+    target = 'SSD'; deleteFails = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('删除 旅行批次')); await advance(tester);
+    await tester.tap(find.text('永久删除')); await advance(tester);
+    expect(find.text('旅行批次'), findsOneWidget);
+    expect(find.text('删除未完成：设备拒绝删除'), findsOneWidget);
+  });
+
 }
