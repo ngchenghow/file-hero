@@ -25,9 +25,15 @@ app.whenReady().then(async () => {
     };
     await click('connect'); assert.equal(await js("document.querySelectorAll('#files tr').length"),2);
     await click('index'); assert.equal(await js("document.getElementById('documented').textContent"),'1');
-    await click('import'); assert.equal(await js("document.querySelectorAll('#files tr').length"),3);
+    await js("document.getElementById('import').click(); document.getElementById('batchName').value='项目资料批次'; document.getElementById('batchDescription').value='本次项目的笔记'; document.getElementById('batchDialog').close('import');");
+    for(let n=0;n<100;n++) { await delay(100); if(await js("!document.getElementById('connect').disabled")) break; }
+    assert.equal(await js("document.querySelectorAll('#files tr').length"),4);
+    assert.match(fs.readFileSync(path.join(root,'项目资料批次','file-readme.txt'),'utf8'),/本次项目的笔记/);
+    await js("[...document.querySelectorAll('#files tr')].find(row=>row.textContent.includes('项目资料批次')).click()");
+    for(let n=0;n<100;n++) { await delay(100); if(await js("!document.getElementById('connect').disabled")) break; }
     await js("[...document.querySelectorAll('#files tr')].find(row=>row.textContent.includes('notes.txt')).click(); document.getElementById('description').value='重要的项目说明';");
-    await click('save'); assert.match(fs.readFileSync(path.join(root,'.file-hero','notes.txt','file-readme.txt'),'utf8'),/重要的项目说明/);
+    await click('save'); assert.match(fs.readFileSync(path.join(root,'项目资料批次','file-readme.txt'),'utf8'),/重要的项目说明/);
+    assert.equal(fs.readdirSync(path.join(root,'项目资料批次')).length,2);
     await click('export'); assert.equal(fs.readFileSync(path.join(base,'exported.txt'),'utf8'),'Imported notes');
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'),screenshot.toPNG());
     console.log('PASS: Electron connect, index, import, edit description, export; screenshot saved.');

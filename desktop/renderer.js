@@ -8,7 +8,7 @@ async function task(fn) { if (working) return; working = true; controls(); statu
 async function reload() { const data = await window.fileHero.invoke('list', folder); show(data); }
 function show(data) {
   entries = data.entries; selected = null; $('details').hidden = true;
-  const files = entries.filter(e => !e.directory);
+  const files = entries.filter(e => !e.directory && e.name.toLowerCase() !== 'file-readme.txt');
   $('count').textContent = files.length; $('total').textContent = bytes(files.reduce((n,f) => n + f.size, 0));
   $('documented').textContent = files.filter(e => e.metadata.Format).length;
   $('capacity').value = data.capacity ? (data.capacity - data.available) / data.capacity * 100 : 0;
@@ -36,8 +36,13 @@ $('connect').onclick = () => task(async () => { const data = await window.fileHe
 $('search').oninput = render;
 $('refresh').onclick = () => task(async () => { await reload(); status('已刷新'); });
 $('up').onclick = () => task(async () => { const next = folder.split('/').slice(0,-1).join('/'); const data = await window.fileHero.invoke('list',next); folder = next; $('search').value = ''; show(data); status('已返回上层'); });
-$('import').onclick = () => task(async () => { const r = await window.fileHero.invoke('import',folder); await reload(); status(`已导入 ${r.imported} 个文件${r.errors.length ? '\n' + r.errors.join('\n') : ''}`); });
-$('index').onclick = () => task(async () => { const r = await window.fileHero.invoke('index',folder); await reload(); status(`已更新 ${r.indexed} 份 file-readme.txt（包括子文件夹）`); });
+$('import').textContent = '↑ 新批次存入';
+$('import').onclick = () => { $('batchName').value = `批次-${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}`; $('batchDescription').value = ''; $('batchDialog').showModal(); };
+$('batchDialog').addEventListener('close',() => { if ($('batchDialog').returnValue === 'import') task(async () => {
+  const r = await window.fileHero.invoke('import',folder,JSON.stringify({name: $('batchName').value.trim(), description: $('batchDescription').value.replace(/[\r\n]+/g,' ')}));
+  await reload(); status(r ? `已将 ${r.imported} 个文件存入「${r.batch}」，批次说明已保存为 file-readme.txt` : '已取消存入');
+}); });
+$('index').onclick = () => task(async () => { const r = await window.fileHero.invoke('index',folder); await reload(); status(`已将 ${r.indexed} 个文件的信息更新到各文件夹的 file-readme.txt`); });
 $('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').showModal(); };
 $('folderDialog').addEventListener('close',() => { if ($('folderDialog').returnValue === 'create') task(async () => { await window.fileHero.invoke('mkdir',folder,$('folderName').value.trim()); await reload(); status('文件夹已创建'); }); });
 $('close').onclick = () => { $('details').hidden = true; };

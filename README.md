@@ -1,61 +1,62 @@
 # file-hero
 
-Portable SSD 文件管理器：**C++17 文件引擎 + Electron 桌面端 + Flutter Android App**。
+Portable SSD 文件管理器，Android 使用 **Flutter + Kotlin SAF**，桌面使用 **Electron + C++17**。目前优先提供 Android 测试 APK。
 
-## v0.1 功能
+## 按批次存入，一个说明文件
 
-- 选择 SSD / 文件夹、浏览子目录、搜索当前目录、显示文件大小和修改日期。
-- 导入文件，自动生成说明；同名文件拒绝覆盖。
-- 导出文件副本、新建文件夹、编辑文件描述。
-- 为已有文件递归生成或更新 `file-readme.txt`；浏览本身不修改 SSD。
-- 桌面显示 SSD 总容量和剩余容量；Android 通过系统 Storage Access Framework 访问 USB SSD，无需所有文件权限。
-- 所有内容本地保存，无云端账号、无文件上传服务。
-
-## 每个文件的说明
-
-同一目录下多个文件不能都直接使用同一个 `file-readme.txt`，因此按文件名分开存放：
+每次点击「新批次存入」，填写批次名称、描述，然后多选文件。程序在当前目录创建独立批次文件夹：
 
 ```text
 SSD/
-  photos/
-    trip.jpg
-    .file-hero/
-      trip.jpg/
-        file-readme.txt
+  日本旅行-2026/
+    photo-01.jpg
+    photo-02.jpg
+    tickets.pdf
+    file-readme.txt
+  工作资料-2026-09/
+    proposal.pdf
+    budget.xlsx
+    file-readme.txt
 ```
 
-UTF-8 文本，两端共享同一格式：
+**一个批次只有一个 `file-readme.txt`，没有逐文件说明目录或逐文件说明文件。** 批次描述、文件清单、每个文件的描述、字节大小、日期全部集中在这一份 UTF-8 文本中。应用内点击文件可以编辑该文件在统一说明中的描述；点击 `file-readme.txt` 可以编辑批次描述。
 
 ```text
-Description: 日本旅行的原始照片
+Batch: 日本旅行-2026
+Created-UTC: 2026-09-23T10:20:30Z
+Description: 日本旅行原始照片与票据
+File-Count: 1
+Format: file-hero/batch-v1
+Last-Stored-UTC: 2026-09-23T10:20:30Z
+Size-Bytes: 3145728
+
+[File: photo-01.jpg]
+Description: 京都第一天
 First-Indexed-UTC: 2026-09-23T10:20:30Z
-Format: file-hero/v1
 Last-Stored-UTC: 2026-09-23T10:20:30Z
 Modified-UTC: 2026-09-22T09:00:00Z
-Name: trip.jpg
+Name: photo-01.jpg
 Size-Bytes: 3145728
 ```
 
-日期统一 UTC。`Modified-UTC` 来自文件系统；`First-Indexed-UTC` 是首次建档日期；`Last-Stored-UTC` 仅在通过 File Hero 导入时记录。已有文件的历史存入日期为 `unknown`，不会用扫描时间假冒。描述是单行文本，最多 8192 UTF-8 字节。
+日期统一 UTC。历史文件无法推断上次存入日期，会记录 `unknown`；通过应用存入的文件记录实际存入时间。文件大小是字节容量，不是磁盘实际占用空间。批次总容量不包含说明文件本身。
 
-整个文件夹连同 `.file-hero` 一起移动到另一台设备即可共享说明。Android 保存前保留 `file-readme.backup.txt`，因为 SAF 不保证原子替换；桌面采用临时文件后替换。请在操作完成后安全弹出 SSD。
+## Android 测试
 
-## Windows 桌面开发
+1. 下载测试 APK 并安装；必要时允许浏览器/文件管理器安装此来源的应用。
+2. 手机连接 USB SSD（需 OTG、支持的文件系统及足够供电）。也可先用系统允许选择的手机文件夹测试。
+3. 点击右上角 USB 图标，在系统文件选择器中授权目标目录。
+4. 点击「新批次存入」，输入批次名称和描述，多选文件。
+5. 打开新批次，应看到所选文件和唯一的 `file-readme.txt`。
+6. 点击任意文件 → 编辑说明；点击 `file-readme.txt` → 编辑批次说明。修改全部写回同一份文本。
 
-需要 Node.js 22+、C++17 编译器（MinGW g++；或 CMake + Visual Studio），以及 npm。
+只支持系统 DocumentsProvider 可见的 USB 设备。每次启动需重新选择目录，不需要「所有文件访问」权限。支持导出文件副本、当前目录搜索、新建目录、递归更新说明。同名批次不会覆盖；一个批次中的重名文件会被拒绝。`file-readme.txt` 是保留名，不可作为待导入文件。
 
-```powershell
-npm ci
-npm test
-npm start
-npm run dist
-```
+说明保存期间可能短暂产生临时文件；成功后只保留一个说明文件。SAF 不保证原子替换，异常断电时可能留下 `.tmp` 或 `.backup` 恢复文件，应恢复后再操作。大文件复制时不要拔盘；目前暂不提供取消和断点续传。
 
-默认检测 `C:/msys64/mingw64/bin/g++.exe`，也可通过 `CXX` 指定 g++ 路径。输出 `dist/File Hero 0.1.0.exe`（portable，无安装步骤）。C++ 引擎静态链接 MinGW runtime。Visual Studio 可用 `cmake -S . -B build/cmake` 和 `cmake --build build/cmake --config Release`，然后将生成的引擎复制到 `build/file-hero-core.exe` 并直接运行 `npx electron .`。
+## 开发与构建
 
-## Android 开发
-
-需要 Flutter stable、JDK 17 和 Android SDK。首次生成与本机 Flutter 版本匹配的 Android runner：
+Android 需要 Flutter stable、JDK 17、Android SDK。首次生成与 Flutter 版本匹配的 runner：
 
 ```sh
 node scripts/bootstrap-mobile.cjs
@@ -63,31 +64,26 @@ cd mobile
 flutter pub get
 flutter analyze
 flutter test
-flutter run
 flutter build apk --debug
 ```
 
-连接支持 OTG 的 Android 手机和 SSD，点击右上角 USB 图标，在系统选择器中授权 SSD 目录。手机必须支持 SSD 的文件系统及供电；只有系统 DocumentsProvider 暴露的设备才可访问。每次启动需重新选择目录。不能通过普通 `dart:io` 路径访问任意 USB 盘，因此使用 Kotlin SAF 桥接。
+GitHub Actions 默认优先构建 Android，包含 analyze、widget test 和 debug APK。测试包用 debug key 签名，正式发布需配置发行签名。
 
-## 构建与验证
+Windows 需要 Node.js 22+ 和 MinGW g++（默认 `C:/msys64/mingw64/bin/g++.exe`，或通过 `CXX` 指定）：
 
-GitHub Actions 自动跑 C++ 测试、Windows portable 打包、Flutter analyze / widget test / debug APK 构建。安装包位于 Actions 成功运行的 Artifacts。Android debug APK 用于测试；正式分发需配置自己的签名。
+```sh
+npm ci
+npm test
+npm start
+npm run dist
+```
 
-`npm test` 覆盖中文文件名、说明保存、时间保留、递归建档、容量更新、禁止覆盖、路径越界和中断写入保护。
+Windows CI 可手动运行「Build and test」，选择 `all`。桌面和 Android 共用相同的批次文本格式。跨设备移动时复制整个批次文件夹即可。
 
 ## 当前范围
 
-第一版提供浏览、导入、导出、建目录、说明管理。尚不提供删除、重命名、移动、断点续传、跨设备联网同步、系统托盘或自动监听。外部工具重命名文件后需手动迁移对应的 `.file-hero/旧文件名` 目录。导出只复制文件，整批迁移请连同说明目录复制。暂不跟随符号链接。不要由多个 File Hero 实例同时写同一目录。大目录扫描在后台执行，但暂不支持取消；文件列表一次载入。未签名 Windows 程序可能显示系统发布者提示。
+第一版提供浏览、按批次导入、导出副本、新建目录、统一说明编辑。尚不提供删除、移动、重命名、跨设备联网同步、自动监听和断点续传。外部更名后使用「更新说明」刷新清单；旧文件名对应的描述不会自动匹配到新文件名。请勿多个程序同时写同一批次。所有内容本地保存。
 
-## 结构
+结构：`native/` C++ 引擎；`desktop/` Electron；`mobile/` Flutter 与 Kotlin；`scripts/` 构建；`tests/` 引擎测试。
 
-```text
-native/         C++ 文件引擎（JSON CLI）
-desktop/        Electron 主进程、隔离 preload、中文界面
-mobile/         Flutter UI 与 Kotlin SAF 桥接
-scripts/        本地构建与 Flutter runner 初始化
-tests/          引擎集成测试
-.github/        Windows / Android CI
-```
-
-实现参考：[Electron 安全说明](https://www.electronjs.org/docs/latest/tutorial/security)、[Android SAF 文档](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter 平台通道](https://docs.flutter.dev/platform-integration/platform-channels)。
+实现参考：[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter 平台通道](https://docs.flutter.dev/platform-integration/platform-channels)、[Electron 安全说明](https://www.electronjs.org/docs/latest/tutorial/security)。
