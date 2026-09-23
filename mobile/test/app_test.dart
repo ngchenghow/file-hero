@@ -93,7 +93,7 @@ void main() {
       calls.add(call);
       if(call.method == 'takeSharedFiles') { if(!available) return null; available = false; return ['photo.jpg', 'ticket.pdf']; }
       if(call.method == 'restoreTarget') return 'My SSD';
-      if(call.method == 'importSelected') return {'batch': '分享照片', 'imported': 2};
+      if(call.method == 'importSelected') { return {'batch': '分享照片', 'imported': 2}; }
       if(call.method == 'list') return <Object>[];
       return null;
     });

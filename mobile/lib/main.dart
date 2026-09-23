@@ -60,7 +60,8 @@ class _FilesPageState extends State<FilesPage> {
     setState(() { connected = true; driveName = selectedTarget; folder = ''; entries = []; thumbnails.clear(); });
     var name = '分享-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').replaceAll('.', '-')}';
     var description = '';
-    while(mounted) {
+    while(true) {
+      if(!mounted) return;
       final form = await showDialog<Map<String,String>>(context: context, builder: (context) => _ShareSaveDialog(target: driveName, files: picked, initialName: name, initialDescription: description));
       if(!mounted) return;
       if(form == null) { await load(''); if(mounted) { setState(() => message = '已取消分享存入，未创建文件夹'); } return; }
