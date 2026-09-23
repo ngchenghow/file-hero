@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_hero/main.dart';
 
+Future<void> advance(WidgetTester tester) async {
+  for (var i = 0; i < 3; i++) { await tester.pump(const Duration(milliseconds: 500)); }
+}
+
 void main() {
   const channel = MethodChannel('com.filehero/storage');
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -27,22 +31,22 @@ void main() {
     });
     await tester.pumpWidget(const FileHeroApp());
     await tester.tap(find.text('选择文件并存入 SSD'));
-    await tester.pumpAndSettle();
+    await advance(tester);
     expect(calls.map((c) => c.method).toList(), ['pickFiles', 'connect']);
     await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)), '旅行资料');
     await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
+    await advance(tester);
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.pumpAndSettle();
+    await advance(tester);
     await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)), '照片与机票');
     await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
+    await advance(tester);
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.pumpAndSettle();
+    await advance(tester);
     expect(find.text('准备存入 SSD'), findsOneWidget);
     expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
     await tester.tap(find.text('新建文件夹并存入'));
-    await tester.pumpAndSettle();
+    await advance(tester);
     final imported = calls.singleWhere((c) => c.method == 'importSelected');
     expect(imported.arguments['name'], '旅行资料');
     expect(imported.arguments['description'], '照片与机票');
@@ -55,8 +59,9 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async { calls.add(call.method); return null; });
     await tester.pumpWidget(const FileHeroApp());
     await tester.tap(find.text('选择文件并存入 SSD'));
-    await tester.pumpAndSettle();
+    await advance(tester);
     expect(calls, ['pickFiles']);
     expect(find.text('已取消选择文件'), findsOneWidget);
   });
 }
+
