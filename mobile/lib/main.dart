@@ -37,7 +37,7 @@ class _FilesPageState extends State<FilesPage> {
   Future<void> load([String? target]) async {
     final path = target ?? folder;
     final data = await call('list', {'path': path}) as List;
-    if(mounted) setState(() { folder = path; entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; });
+    if(mounted) { setState(() { folder = path; entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; }); }
   }
   Future<String?> textPrompt(String title, {String initial = ''}) async {
     final controller = TextEditingController(text: initial);
@@ -58,8 +58,8 @@ class _FilesPageState extends State<FilesPage> {
     if(!mounted || action == null) return;
     if(action == 'describe') {
       final description = await textPrompt('文件描述', initial: meta['Description'] as String? ?? '');
-      if(description != null) await work(() async { await call('describe', {'path': child(file['name'] as String), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); });
-    } else { await work(() async { final result = await call('export', {'path': child(file['name'] as String)}); if(mounted) setState(() => message = result == true ? '已导出文件副本' : '已取消导出'); }); }
+      if(description != null) { await work(() async { await call('describe', {'path': child(file['name'] as String), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
+    } else { await work(() async { final result = await call('export', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = result == true ? '已导出文件副本' : '已取消导出'); } }); }
   }
   @override
   Widget build(BuildContext context) {
@@ -76,7 +76,7 @@ class _FilesPageState extends State<FilesPage> {
         if(connected) SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(12,0,12,12), child: Wrap(spacing: 8, children: [
           FilledButton.icon(onPressed: busy ? null : () => work(() async { await call('import'); await load(); }), icon: const Icon(Icons.upload), label: const Text('导入')),
           OutlinedButton(onPressed: busy ? null : () => work(() async { final n = await call('index'); await load(); setState(() => message = '已更新 $n 份说明'); }), child: const Text('生成说明')),
-          TextButton(onPressed: busy ? null : () async { final name = await textPrompt('新建文件夹'); if(name != null) await work(() async { await call('mkdir', {'name': name.trim()}); await load(); }); }, child: const Text('＋ 文件夹')),
+          TextButton(onPressed: busy ? null : () async { final name = await textPrompt('新建文件夹'); if(name != null) { await work(() async { await call('mkdir', {'name': name.trim()}); await load(); }); } }, child: const Text('＋ 文件夹')),
         ]))),
       ]),
     );
