@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.os.Bundle
 import android.util.Size
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
@@ -30,6 +31,8 @@ class MainActivity : FlutterActivity() {
     private var pendingPath = ""
     private var pendingKind = ""
     private var selectedSources: List<Pair<Uri,String>> = emptyList()
+    private var storageChannel: MethodChannel? = null
+    private val sharedBatches = java.util.ArrayDeque<List<Uri>>()
     private var active = false
     private fun utc(millis: Long = System.currentTimeMillis()): String = if (millis <= 0) "unknown" else SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(millis))
     private fun valid(name: String) {
@@ -103,7 +106,39 @@ class MainActivity : FlutterActivity() {
     }
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
-        MethodChannel(engine.dartExecutor.binaryMessenger, "com.filehero/storage").setMethodCallHandler { call, result -> handle(call, result) }
+        storageChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "com.filehero/storage").also { channel -> channel.setMethodCallHandler { call, result -> handle(call, result) } }
+    }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if(savedInstanceState == null) receiveShare(intent)
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveShare(intent)
+    }
+    @Suppress("DEPRECATION")
+    private fun receiveShare(incoming: Intent?) {
+        if(incoming == null || incoming.action !in listOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE)) return
+        val uris = mutableListOf<Uri>()
+        if(incoming.action == Intent.ACTION_SEND_MULTIPLE) {
+            incoming.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        } else { incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) } }
+        incoming.clipData?.let { clip -> for(i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
+        // Only use delegated content URIs, never sender-supplied filesystem paths.
+        sharedBatches.addLast(uris.distinct().filter { it.scheme == "content" })
+        storageChannel?.invokeMethod("shareAvailable", null)
+    }
+    private fun sourceFiles(uris: List<Uri>): List<Pair<Uri,String>> {
+        require(uris.isNotEmpty()) { "分享中没有可读取的文件，请从相册或文件管理器分享文件" }
+        val names = mutableSetOf<String>()
+        return uris.distinct().map { source ->
+            val name = contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取分享文件名，请重新分享")
+            valid(name)
+            require(name.lowercase(Locale.ROOT) !in listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")) { "file-readme.txt 保留给批次说明" }
+            require(names.add(name.lowercase(Locale.ROOT))) { "文件有重名，请分批存入" }
+            source to name
+        }
     }
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
         if(call.method == "thumbnail") {
@@ -116,6 +151,22 @@ class MainActivity : FlutterActivity() {
         }
         if(active) { result.error("BUSY", "文件操作仍在进行", null); return }
         active = true
+        if(call.method == "takeSharedFiles") {
+            val uris = sharedBatches.pollFirst()
+            if(uris == null) { active = false; result.success(null); return }
+            background(result) { val sources = sourceFiles(uris); selectedSources = sources; sources.map { it.second } }
+            return
+        }
+        if(call.method == "restoreTarget") {
+            background(result) {
+                try {
+                    val saved = getPreferences(MODE_PRIVATE).getString("ssdTarget", null)
+                    val candidate = root ?: saved?.let { DocumentFile.fromTreeUri(this, Uri.parse(it)) }
+                    if(candidate != null && candidate.canRead() && candidate.canWrite()) { root = candidate; candidate.name ?: "SSD" } else null
+                } catch(_: Exception) { root = null; null }
+            }
+            return
+        }
         val path = call.argument<String>("path") ?: ""
         if(call.method in listOf("connect", "pickFiles", "export")) {
             try {
@@ -164,15 +215,12 @@ class MainActivity : FlutterActivity() {
                     val flags = (data?.flags ?: 0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")
-                    require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected; selected.name ?: "USB SSD"
+                    require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected
+                    getPreferences(MODE_PRIVATE).edit().putString("ssdTarget", uri.toString()).apply()
+                    selected.name ?: "USB SSD"
                 }
                 "pickFiles" -> {
-                    val names = mutableSetOf<String>()
-                    val sources = picked.distinct().map { source ->
-                        val name = contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取文件名")
-                        valid(name); require(name.lowercase(Locale.ROOT) !in listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")) { "file-readme.txt 及其临时文件名保留给批次说明" }
-                        require(names.add(name.lowercase(Locale.ROOT))) { "本批文件有重名，请分批存入" }; source to name
-                    }
+                    val sources = sourceFiles(picked)
                     selectedSources = sources
                     sources.map { it.second }
                 }

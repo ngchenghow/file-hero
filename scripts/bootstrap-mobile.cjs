@@ -13,5 +13,6 @@ let content = fs.readFileSync(gradle,'utf8');
 if(!content.includes('androidx.documentfile:documentfile')) content += '\ndependencies {\n    implementation("androidx.documentfile:documentfile:1.0.1")\n}\n';
 fs.writeFileSync(gradle,content);
 const generatedTest = path.join(root,'test/widget_test.dart');
+fs.cpSync(path.join(root, 'branding/android'), path.join(root, 'android/app/src/main/res'), {recursive: true});
 if(fs.existsSync(generatedTest) && fs.readFileSync(generatedTest,'utf8').includes('MyApp')) fs.unlinkSync(generatedTest);
 console.log('Android runner ready. Run: cd mobile && flutter pub get && flutter build apk --debug');

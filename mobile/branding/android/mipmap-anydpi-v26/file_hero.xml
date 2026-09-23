@@ -1,0 +1,4 @@
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/file_hero_background" />
+  <foreground android:drawable="@drawable/file_hero_foreground" />
+</adaptive-icon>
