@@ -104,14 +104,17 @@ class MainActivity : FlutterActivity() {
     }
     private fun index(dir: DocumentFile): Int {
         var n = 0; val batch = readBatch(dir); val previous = batch.files.toMap(); batch.files.clear()
-        for(file in dir.listFiles()) if(file.name != ".file-hero") {
+        for(file in dir.listFiles()) if(file.name != ".file-hero" && !isThumbs(file)) {
             if(file.isDirectory) n += index(file)
             else if(file.isFile && !file.name.equals("file-readme.txt", true) && file.name !in listOf("file-readme.txt.tmp", "file-readme.txt.backup")) { batch.files[file.name!!] = record(file, previous[file.name] ?: mutableMapOf()); n++ }
         }
         if(batch.files.isNotEmpty() || batch.header.isNotEmpty()) writeBatch(dir, batch)
         return n
     }
-    private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
+    // The desktop app keeps video screenshots in a "thumbs" folder (listed under Thumbnails in file-readme.txt); it stays hidden here too.
+    private fun isThumbs(f: DocumentFile): Boolean = f.isDirectory && f.name.equals("thumbs", true)
+    private fun thumbList(meta: Map<String,String>?): List<String> = meta?.get("Thumbnails")?.split(" | ")?.filter { it.isNotEmpty() } ?: emptyList()
+    private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" && !isThumbs(it) }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
     private fun entry(f: DocumentFile, meta: Map<String,String>): Map<String,Any?> =
         mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
     private fun background(result: MethodChannel.Result, fn: () -> Any?) {
@@ -324,7 +327,7 @@ class MainActivity : FlutterActivity() {
                 "rename" -> renameEntry(path, file, call.argument<String>("name") ?: "")
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
-                "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
+                "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(!name.equals("thumbs", true)) { "thumbs 是视频截图文件夹的保留名称" }; require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
                 "importSelected" -> importSelected(file, call.argument<String>("name") ?: "", call.argument<String>("description") ?: "", call.argument<Boolean>("existing") ?: false)
                 else -> error("Unknown method")
             }
@@ -380,6 +383,11 @@ class MainActivity : FlutterActivity() {
         if(!deleted) return mapOf("deleted" to false, "warning" to "存储设备拒绝删除或仅删除了部分内容，请检查剩余项目")
         var warning = ""
         if(batch != null) {
+            val thumbs = parent.findFile("thumbs")
+            if(thumbs != null && thumbs.isDirectory) {
+                for(shot in thumbList(batch.files[name])) if(shot.startsWith("thumbs/")) thumbs.findFile(shot.removePrefix("thumbs/"))?.delete()
+                if(thumbs.listFiles().isEmpty()) thumbs.delete()
+            }
             batch.files.remove(name)
             try { writeBatch(parent, batch) }
             catch(e: Exception) { warning = "文件已删除，但说明未完整更新：${e.message}" }
@@ -394,6 +402,7 @@ class MainActivity : FlutterActivity() {
         val reserved = listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")
         require(reserved.none { it.equals(old, true) }) { "file-readme.txt 是批次说明，不能重命名" }
         require(reserved.none { it.equals(name, true) }) { "file-readme.txt 是批次说明的保留名称" }
+        require(!(file.isDirectory && name.equals("thumbs", true))) { "thumbs 是视频截图文件夹的保留名称" }
         if(name == old) return mapOf("name" to name, "warning" to "")
         require(file.canWrite()) { "没有重命名此项目的权限" }
         val parent = file.parentFile ?: error("无法读取父文件夹")
@@ -409,7 +418,18 @@ class MainActivity : FlutterActivity() {
         if(batch != null) {
             val meta = batch.files.remove(old)
             if(meta != null) {
-                meta["Name"] = name; batch.files[name] = meta
+                meta["Name"] = name
+                // Screenshots are named after their video, so they are renamed along with it.
+                val thumbs = parent.findFile("thumbs")
+                if(thumbs != null && thumbs.isDirectory && meta.containsKey("Thumbnails")) {
+                    meta["Thumbnails"] = thumbList(meta).joinToString(" | ") { shot ->
+                        val prefix = "thumbs/$old-"
+                        val shotFile = if(shot.startsWith(prefix)) thumbs.findFile(shot.removePrefix("thumbs/")) else null
+                        val next = "$name-" + shot.removePrefix(prefix)
+                        if(shotFile != null && thumbs.findFile(next) == null && shotFile.renameTo(next) && shotFile.name == next) "thumbs/$next" else shot
+                    }
+                }
+                batch.files[name] = meta
                 try { writeBatch(parent, batch) } catch(e: ManifestCommittedException) { warning = e.message ?: "" } catch(e: Exception) { file.renameTo(old); throw e }
             }
         } else if(directory && file.findFile("file-readme.txt") != null) {
