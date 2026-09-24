@@ -88,6 +88,22 @@ app.whenReady().then(async () => {
     await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click(); document.getElementById('description').value='重要的项目说明'; document.getElementById('save').click()");
     await delay(300); await idle();
     assert.match(fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8'), /重要的项目说明/);
+
+    // Searching from the root finds file descriptions in subfolders; results can be edited in place.
+    await js("document.getElementById('details').hidden = true; document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero'", 'up for search');
+    await js("{ const s = document.getElementById('search'); s.value = '项目说明'; s.dispatchEvent(new Event('input')); }");
+    await until("document.querySelectorAll('#files .card').length === 1 && document.querySelector('#files .card').textContent.includes('notes.txt')", 'search result');
+    assert.match(await js("document.querySelector('#files .where').textContent"), /位置：file-hero \/ 东京旅行$/);
+    await js("document.querySelector('#files .card').click(); document.getElementById('description').value='重要的项目说明，已核对'; document.getElementById('save').click()");
+    await delay(300); await idle();
+    assert.match(fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8'), /重要的项目说明，已核对/);
+    assert.match(await js("document.querySelector('#files .card').textContent"), /已核对/); // still showing results after the save
+    await js("{ const s = document.getElementById('search'); s.value = '第一天'; s.dispatchEvent(new Event('input')); }");
+    await until("document.querySelector('#files .where')?.textContent.endsWith('东京旅行 / 相册')", 'folder result');
+    await js("document.querySelector('#files .card').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero / 东京旅行 / 相册 / 第一天'", 'opened result folder');
+    assert.equal(await js("document.getElementById('search').value"), '');
+    await js("document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero / 东京旅行 / 相册'", 'up 1'); await idle();
+    await js("document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero / 东京旅行'", 'up 2'); await idle();
     await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click(); document.getElementById('export').click()");
     await delay(300); await idle();
     assert.equal(fs.readFileSync(path.join(base, 'exported.txt'), 'utf8'), 'Imported notes');
@@ -104,7 +120,7 @@ app.whenReady().then(async () => {
     await until(`${tray}.includes('extra.txt')`, 'staged for screenshot');
     await delay(500);
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'), screenshot.toPNG());
-    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, export, delete; screenshot saved.');
+    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, export, delete; screenshot saved.');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

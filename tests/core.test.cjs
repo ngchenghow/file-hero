@@ -104,6 +104,17 @@ test('folder cards carry batch description and a cover picked from previewable f
   assert.equal(entries.find(e=>e.name==='旅行').cover,'a.mp4'); assert.equal(entries.find(e=>e.name==='文字').cover,'');
   assert.equal(entries.find(e=>e.name==='旅行').metadata.Description,'京都');
 });
+test('search walks every subfolder and matches file and folder descriptions', t => {
+  const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'a'); fs.writeFileSync(b,'b');
+  run(root,'batch','',['旅行','京都 Café',a]); run(root,'batch','旅行',['第二天','',b]); run(root,'describe','旅行/第二天/b.txt','清水寺的日落');
+  const hits=q=>run(root,'search','',q).entries.map(e=>e.path);
+  assert.deepEqual(hits('日落'),['旅行/第二天/b.txt']);
+  assert.deepEqual(hits('CAFÉ'),['旅行']);
+  assert.deepEqual(hits('B.TXT'),['旅行/第二天/b.txt']);
+  const hit=run(root,'search','旅行','清水').entries[0]; assert.equal(hit.name,'b.txt'); assert.equal(hit.metadata.Description,'清水寺的日落'); assert.equal(hit.size,1);
+  assert.deepEqual(run(root,'search','旅行/第二天','京都').entries,[]);
+  assert.throws(()=>run(root,'search','',' '));
+});
 test('delete removes files from the manifest, removes folders, and never removes the root', t => {
   const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'abc'); fs.writeFileSync(b,'12345');
   run(root,'batch','',['批次','desc',a,b]);

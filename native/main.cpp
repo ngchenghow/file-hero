@@ -287,9 +287,47 @@ std::string drives() {
 #endif
   return out+"]";
 }
+std::string entryJson(const fs::directory_entry& e, Meta& meta) {
+  bool dir=e.is_directory(); auto stored=meta.count("Last-Stored-UTC") && meta["Last-Stored-UTC"]!="unknown" ? meta["Last-Stored-UTC"] : modified(e.path());
+  std::string out="{\"name\":"+quote(utf(e.path().filename()))+",\"directory\":"+(dir?"true":"false");
+  if(dir) out+=",\"size\":"+(meta.count("Size-Bytes")?meta["Size-Bytes"]:std::string("0"))+",\"fileCount\":"+(meta.count("File-Count")?meta["File-Count"]:std::string("null"))+",\"modified\":"+quote(stored)+",\"cover\":"+quote(cover(e.path()));
+  else out+=",\"size\":"+std::to_string(e.file_size())+",\"modified\":"+quote(modified(e.path()));
+  return out+",\"metadata\":"+metaJson(meta);
+}
+// Case-insensitive for non-ASCII letters too (É, Ä…); CJK text has no case and is compared as is.
+std::wstring folded(const std::string& s) {
+  auto w=fs::u8path(s).wstring();
+#ifdef _WIN32
+  if(!w.empty()) CharLowerBuffW(w.data(),DWORD(w.size()));
+#else
+  for(auto& c:w) c=wchar_t(std::towlower(c));
+#endif
+  return w;
+}
+// Matches names and descriptions in every subfolder, reading each file-readme.txt once, like the Android search.
+Batch batchOrEmpty(const fs::path& dir) { try { return readBatch(dir,false); } catch(...) { return {}; } }
+void searchTree(const fs::path& root, const fs::path& dir, Batch& batch, const std::wstring& query, std::string& out, size_t& found, bool& truncated) {
+  std::vector<fs::directory_entry> entries; std::error_code ec;
+  for(const auto& e:fs::directory_iterator(dir,ec)) if(e.path().filename()!=".file-hero" && !e.is_symlink(ec) && (e.is_directory(ec) || e.is_regular_file(ec))) entries.push_back(e);
+  std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){if(x.is_directory()!=y.is_directory()) return x.is_directory(); return x.path()<y.path();});
+  for(const auto& e:entries) {
+    if(truncated) return;
+    auto name=utf(e.path().filename()); Meta meta; Batch sub;
+    if(e.is_directory()) { sub=batchOrEmpty(e.path()); meta=sub.header; }
+    else { meta=isReadme(e.path())?batch.header:batch.files.count(name)?batch.files[name]:Meta{}; if(!meta.empty()) meta["Format"]="file-hero/batch-v1"; }
+    // A readme holds its folder's description; the folder itself already matches on it.
+    bool described=!isReadme(e.path()) && folded(meta.count("Description")?meta["Description"]:"").find(query)!=std::wstring::npos;
+    if(described || folded(name).find(query)!=std::wstring::npos) {
+      if(found==500) { truncated=true; return; }
+      if(found++) out+=",";
+      out+=entryJson(e,meta)+",\"path\":"+quote(fs::relative(e.path(),root).generic_u8string())+"}";
+    }
+    if(e.is_directory()) searchTree(root,e.path(),sub,query,out,found,truncated);
+  }
+}
 int run(const std::vector<std::string>& a) {
   try {
-    require(a.size()>=2, "Usage: core <drives|setup|list|index|batch|append|import|export|describe|mkdir|delete> <root> <relative-path> [arguments]");
+    require(a.size()>=2, "Usage: core <drives|setup|list|search|index|batch|append|import|export|describe|mkdir|delete> <root> <relative-path> [arguments]");
     if(a[1]=="drives") { std::cout << drives(); return 0; }
     if(a[1]=="setup") {
       // All data lives in <SSD>/file-hero, the same folder the Android app uses.
@@ -309,15 +347,14 @@ int run(const std::vector<std::string>& a) {
       auto s=fs::space(root); std::string out="{\"capacity\":"+std::to_string(s.capacity)+",\"available\":"+std::to_string(s.available)+",\"entries\":["; bool first=true;
       for(const auto& e:entries) {
         if(!e.is_directory() && !e.is_regular_file()) continue;
+        Meta meta; try { meta=e.is_directory()?readBatch(e.path(),false).header:readMeta(e.path()); } catch(...) {}
         if(!first) out+=",";
-        first=false; bool dir=e.is_directory(); Meta meta;
-        try { meta=dir?readBatch(e.path(),false).header:readMeta(e.path()); } catch(...) {}
-        auto stored=meta.count("Last-Stored-UTC") && meta["Last-Stored-UTC"]!="unknown" ? meta["Last-Stored-UTC"] : modified(e.path());
-        out+="{\"name\":"+quote(utf(e.path().filename()))+",\"directory\":"+(dir?"true":"false");
-        if(dir) out+=",\"size\":"+(meta.count("Size-Bytes")?meta["Size-Bytes"]:std::string("0"))+",\"fileCount\":"+(meta.count("File-Count")?meta["File-Count"]:std::string("null"))+",\"modified\":"+quote(stored)+",\"cover\":"+quote(cover(e.path()));
-        else out+=",\"size\":"+std::to_string(e.file_size())+",\"modified\":"+quote(modified(e.path()));
-        out+=",\"metadata\":"+metaJson(meta)+"}";
+        first=false; out+=entryJson(e,meta)+"}";
       } std::cout << out << "]}";
+    } else if(cmd=="search") {
+      require(a.size()==5 && fs::is_directory(p),"缺少搜索内容"); require(a[4].find_first_not_of(" 	")!=std::string::npos,"请输入搜索内容"); auto query=folded(a[4]);
+      std::string out; size_t found=0; bool truncated=false; auto batch=batchOrEmpty(p); searchTree(root,p,batch,query,out,found,truncated);
+      std::cout << "{\"truncated\":" << (truncated?"true":"false") << ",\"entries\":[" << out << "]}";
     } else if(cmd=="index") {
       require(fs::is_directory(p),"找不到文件夹"); int n=0; indexTree(p,n); std::cout << "{\"indexed\":" << n << "}";
     } else if(cmd=="mkdir") {

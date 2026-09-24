@@ -71,6 +71,7 @@ textarea{resize:vertical}
 .card strong{font-size:14px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .desc{margin:4px 0 5px;font-size:13px;color:#395345;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .empty-desc{color:#9aa39f}
+.card .where{color:#528a67;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card-actions{display:flex;flex-direction:column;gap:6px}
 .card-actions button{font-size:12px;padding:6px 10px}
 .empty{text-align:center;padding:60px 20px;color:#80908a;background:white;border:1px dashed var(--line);border-radius:12px}

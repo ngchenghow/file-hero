@@ -168,6 +168,7 @@ else {
       // Read-only actions stay available during long copies.
       if (action === 'state') return { ...connection(), shares: sharePayload(), settings: { autostart: settings.autostart, menu: settings.menu, integrated } };
       if (action === 'list') return inRoot('list', relative);
+      if (action === 'search') return inRoot('search', relative, value);
       if (action === 'drives') return drives();
       if (action === 'thumb') {
         try { return (await nativeImage.createThumbnailFromPath(local(relative), { width: 192, height: 192 })).toDataURL(); } catch { return null; }

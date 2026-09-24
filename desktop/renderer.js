@@ -1,9 +1,11 @@
 const $ = id => document.getElementById(id);
 const hero = window.fileHero;
-let folder = '', entries = [], selected = null, connected = false, working = false, sharing = null, saving = false;
+let folder = '', entries = [], results = null, searchTimer = null, searchRun = 0, selected = null, connected = false, working = false, sharing = null, saving = false;
 const thumbs = new Map();
 const bytes = n => { n = Number(n) || 0; if (!n) return '0 B'; const unit = Math.min(4, Math.floor(Math.log(n) / Math.log(1024))); return `${(n / 1024 ** unit).toFixed(unit ? 1 : 0)} ${['B','KB','MB','GB','TB'][unit]}`; };
 const relative = name => folder ? `${folder}/${name}` : name;
+// Search results come from any subfolder and carry their own path.
+const pathOf = entry => entry.path || relative(entry.name);
 const isReadme = name => name.toLowerCase() === 'file-readme.txt';
 const previewable = name => /\.(jpe?g|png|gif|webp|bmp|heic|heif|mp4|mov|m4v|3gp|mkv|webm|avi|pdf)$/i.test(name);
 const day = text => (text || 'unknown').split('T')[0];
@@ -28,7 +30,7 @@ function showDrive(state) {
 }
 function setConnected(state, listing) {
   connected = true; folder = ''; thumbs.clear(); showDrive(state);
-  $('welcome').hidden = true; $('library').hidden = false; $('search').value = '';
+  $('welcome').hidden = true; $('library').hidden = false; clearSearch();
   if (listing) show(listing); else reload().catch(error => status(error.message));
   controls(); renderTray();
 }
@@ -56,7 +58,19 @@ function renderDrives(list) {
   if (!list.length) { const none = document.createElement('p'); none.className = 'muted'; none.textContent = '暂未发现 USB SSD。'; $('driveList').append(none); }
 }
 
-async function reload() { show(await hero.invoke('list', folder)); }
+async function reload() { show(await hero.invoke('list', folder)); if (results) await runSearch(); }
+function clearSearch() { clearTimeout(searchTimer); searchRun++; $('search').value = ''; results = null; }
+// Searches the open folder and every subfolder, matching names and descriptions from each file-readme.txt.
+async function runSearch() {
+  const query = $('search').value.trim(), run = ++searchRun;
+  if (!query) { results = null; render(); return; }
+  try {
+    const r = await hero.invoke('search', folder, query);
+    if (run !== searchRun) return;
+    results = r.entries; render();
+    status(r.truncated ? `找到超过 ${r.entries.length} 项，只显示前 ${r.entries.length} 项，请输入更具体的内容` : `找到 ${r.entries.length} 项`);
+  } catch (error) { if (run === searchRun) status(`搜索未完成：${error.message}`); }
+}
 function show(data) {
   entries = data.entries; selected = null; $('details').hidden = true;
   const files = entries.filter(e => !e.directory && !isReadme(e.name)), dirs = entries.filter(e => e.directory);
@@ -71,7 +85,7 @@ function cover(entry, large = false, fetch = true) {
   const icon = document.createElement('span'); icon.textContent = entry.directory ? '▰' : /\.pdf$/i.test(entry.name) ? '▤' : '▢';
   const label = document.createElement('small'); label.textContent = entry.directory ? '文件夹' : (entry.name.includes('.') ? entry.name.split('.').pop() : '文件').toUpperCase().slice(0, 8);
   fallback.append(icon, label); box.append(fallback);
-  const source = entry.directory ? entry.cover && `${relative(entry.name)}/${entry.cover}` : previewable(entry.name) && relative(entry.name);
+  const source = entry.directory ? entry.cover && `${pathOf(entry)}/${entry.cover}` : previewable(entry.name) && pathOf(entry);
   if (fetch && source) {
     const key = `${source}|${entry.modified}`;
     if (!thumbs.has(key)) thumbs.set(key, hero.invoke('thumb', source).catch(() => null));
@@ -80,10 +94,10 @@ function cover(entry, large = false, fetch = true) {
   return box;
 }
 function render() {
-  const query = $('search').value.toLocaleLowerCase(); $('files').replaceChildren();
-  const visible = entries.filter(e => e.name.toLocaleLowerCase().includes(query) || (e.metadata.Description || '').toLocaleLowerCase().includes(query));
+  $('files').replaceChildren();
+  const visible = results || entries;
   $('empty').hidden = visible.length > 0;
-  $('empty').querySelector('h3').textContent = query ? '没有匹配的文件' : '这个文件夹还是空的';
+  $('empty').querySelector('h3').textContent = results ? '没有匹配的文件' : '这个文件夹还是空的';
   for (const entry of visible) {
     const card = document.createElement('article'); card.className = 'card'; card.tabIndex = 0;
     const body = document.createElement('div'); body.className = 'body';
@@ -94,6 +108,10 @@ function render() {
     const size = document.createElement('small'); size.textContent = entry.directory ? `${entry.fileCount ?? '—'} 个文件 · ${bytes(entry.size)}` : bytes(entry.size);
     const date = document.createElement('small'); date.textContent = `日期：${day(entry.modified)}`;
     body.append(name, desc, size, date);
+    if (entry.path) {
+      const where = document.createElement('small'); where.className = 'where'; const parent = entry.path.split('/').slice(0, -1).join(' / ');
+      where.textContent = `位置：file-hero${parent ? ' / ' + parent : ''}`; where.title = where.textContent; body.append(where);
+    }
     const actions = document.createElement('div'); actions.className = 'card-actions';
     if (!entry.directory) {
       const open = document.createElement('button'); open.textContent = '打开'; open.title = `用电脑默认程序打开 ${entry.name}`;
@@ -106,16 +124,16 @@ function render() {
     const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '删除'; remove.title = `删除 ${entry.name}`;
     remove.onclick = event => { event.stopPropagation(); removeEntry(entry); }; actions.append(remove);
     card.append(cover(entry), body, actions);
-    const activate = () => { if (working) return; if (entry.directory) enter(relative(entry.name)); else details(entry); };
+    const activate = () => { if (working) return; if (entry.directory) enter(pathOf(entry)); else details(entry); };
     card.addEventListener('click', activate);
     card.addEventListener('dblclick', () => { if (!entry.directory && !working) openFile(entry); });
     card.addEventListener('keydown', e => { if (e.key === 'Enter') activate(); });
     $('files').append(card);
   }
 }
-function enter(next) { task(async () => { const data = await hero.invoke('list', next); folder = next; $('search').value = ''; show(data); status('已打开文件夹'); }); }
-function exportFolder(entry) { task(async () => { const r = await hero.invoke('export', relative(entry.name), 'directory'); status(r ? `已导出文件夹「${r.name}」（${r.files} 个文件）到 ${r.path}` : '已取消导出'); }); }
-function openFile(entry) { hero.invoke('open', relative(entry.name)).then(() => status(`已用默认程序打开「${entry.name}」`), error => status(`操作未完成：${error.message}`)); }
+function enter(next) { task(async () => { const data = await hero.invoke('list', next); folder = next; clearSearch(); show(data); status('已打开文件夹'); }); }
+function exportFolder(entry) { task(async () => { const r = await hero.invoke('export', pathOf(entry), 'directory'); status(r ? `已导出文件夹「${r.name}」（${r.files} 个文件）到 ${r.path}` : '已取消导出'); }); }
+function openFile(entry) { hero.invoke('open', pathOf(entry)).then(() => status(`已用默认程序打开「${entry.name}」`), error => status(`操作未完成：${error.message}`)); }
 function details(entry) {
   selected = entry; $('details').hidden = false; $('detailName').textContent = entry.name;
   const readme = isReadme(entry.name);
@@ -139,7 +157,7 @@ async function removeEntry(entry) {
   if (working) return;
   const text = `「${entry.name}」\n\n${entry.directory ? '此文件夹及其中所有文件和子文件夹都会永久删除。' : '此文件将永久删除。'}此操作无法撤销。${isReadme(entry.name) ? '\n删除说明文件会丢失本批描述和历史记录。' : ''}`;
   if (!await confirm(entry.directory ? '删除文件夹？' : '删除文件？', text)) { status('已取消删除'); return; }
-  task(async () => { const r = await hero.invoke('delete', relative(entry.name)); await reload(); status(`已删除「${entry.name}」。${r.warning || ''}`); });
+  task(async () => { const r = await hero.invoke('delete', pathOf(entry)); await reload(); status(`已删除「${entry.name}」。${r.warning || ''}`); });
 }
 
 // Staging area: dropped items, the file picker and Explorer's "Share to SSD" all land here; main keeps the list.
@@ -251,7 +269,7 @@ hero.on(event => {
     $('shareProgressText').textContent = `${Math.min(event.index + 1, event.count)} / ${event.count} 个文件 · ${bytes(event.done)} / ${bytes(event.total)}`;
   }
 });
-$('search').oninput = render;
+$('search').oninput = () => { clearTimeout(searchTimer); if (!$('search').value.trim()) { searchRun++; results = null; render(); return; } searchTimer = setTimeout(runSearch, 300); };
 $('refresh').onclick = () => task(async () => { await reload(); status('已刷新'); });
 $('up').onclick = () => enter(folder.split('/').slice(0, -1).join('/'));
 $('import').onclick = () => task(async () => { status(await hero.invoke('pick-files') ? '已加入待存入区' : '已取消选择'); });
@@ -259,10 +277,10 @@ $('index').onclick = () => task(async () => { const r = await hero.invoke('index
 $('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').showModal(); };
 $('folderDialog').addEventListener('close', () => { if ($('folderDialog').returnValue === 'create') task(async () => { await hero.invoke('mkdir', folder, $('folderName').value.trim()); await reload(); status('文件夹已创建'); }); });
 $('close').onclick = () => { $('details').hidden = true; };
-$('save').onclick = () => task(async () => { const file = selected; const desc = $('description').value.replace(/[\r\n]+/g, ' '); await hero.invoke('describe', relative(file.name), desc); await reload(); details(entries.find(e => e.name === file.name)); status('说明已保存到 SSD'); });
+$('save').onclick = () => task(async () => { const file = selected; const desc = $('description').value.replace(/[\r\n]+/g, ' '); await hero.invoke('describe', pathOf(file), desc); await reload(); details((results || entries).find(e => pathOf(e) === pathOf(file)) || file); status('说明已保存到 SSD'); });
 $('open').onclick = () => openFile(selected);
-$('reveal').onclick = () => hero.invoke('reveal', relative(selected.name));
-$('export').onclick = () => task(async () => { const r = await hero.invoke('export', relative(selected.name)); status(r ? '文件副本已导出（说明仍保留在 SSD）' : '已取消导出'); });
+$('reveal').onclick = () => hero.invoke('reveal', pathOf(selected));
+$('export').onclick = () => task(async () => { const r = await hero.invoke('export', pathOf(selected)); status(r ? '文件副本已导出（说明仍保留在 SSD）' : '已取消导出'); });
 $('delete').onclick = () => removeEntry(selected);
 $('switchDrive').onclick = () => task(async () => { await hero.invoke('disconnect'); setDisconnected('请选择 SSD'); renderDrives(await hero.invoke('drives')); });
 $('pickFolder').onclick = () => task(async () => { const r = await hero.invoke('pick-folder'); if (!r) { status('已取消'); return; } setConnected(r, r.listing); status('已连接'); });
