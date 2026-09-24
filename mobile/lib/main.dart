@@ -175,9 +175,19 @@ class _FilesPageState extends State<FilesPage> {
         continue;
       }
       await load(result['path'] as String);
-      if(mounted) { setState(() => message = '已存入「${result['batch']}」：${result['imported']} 个文件；说明已更新。${result['warning'] ?? ''}'); }
+      if(mounted) { setState(() => message = '已存入「${result['batch']}」：${result['imported']} 个文件；说明已更新。${shotsNote(result['thumbsMade'], result['thumbsFailed'])}${result['warning'] ?? ''}'); }
       return;
     }
+  }
+  String shotsNote(Object? made, Object? failed) => '${(made as int? ?? 0) > 0 ? '已为 $made 个视频生成截图。' : ''}${(failed as int? ?? 0) > 0 ? '$failed 个视频无法截图（格式不支持或文件损坏）。' : ''}';
+  // Fills in screenshots for videos in the open folder and its subfolders (new videos get them when stored).
+  Future<void> makeThumbs() async {
+    await work(() async {
+      final result = Map<String,dynamic>.from(await call('makeThumbs') as Map);
+      await load();
+      final note = shotsNote(result['made'], result['failed']);
+      if(mounted) { setState(() => message = note.isEmpty ? '所有视频都已有截图' : note); }
+    });
   }
   String child(String name) => folder.isEmpty ? name : '$folder/$name';
   // Search results carry their full path; entries of the current folder only have a name.
@@ -354,7 +364,7 @@ class _FilesPageState extends State<FilesPage> {
       appBar: AppBar(title: const Text('File Hero', style: TextStyle(fontWeight: FontWeight.w700))),
       body: Column(children: [
         Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('每份文件，都有故事。', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 8), Text(connected ? driveName : '你的 SSD 随身文件库', style: const TextStyle(color: Color(0xff528a67))), const SizedBox(height: 16), TextField(controller: searchText, decoration: InputDecoration(hintText: '搜索当前文件夹及子文件夹', prefixIcon: const Icon(Icons.search), suffixIcon: query.isEmpty ? null : IconButton(tooltip: '清除搜索', onPressed: () => setState(clearSearch), icon: const Icon(Icons.close)), filled: true, border: const OutlineInputBorder(borderSide: BorderSide.none)), onChanged: search),
-          if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), if(folder.isNotEmpty) IconButton(tooltip: '重命名此文件夹', onPressed: busy ? null : () => renameEntry({'name': folder.split('/').last, 'directory': true, 'path': folder}), icon: const Icon(Icons.drive_file_rename_outline)), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
+          if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), if(folder.isNotEmpty) IconButton(tooltip: '重命名此文件夹', onPressed: busy ? null : () => renameEntry({'name': folder.split('/').last, 'directory': true, 'path': folder}), icon: const Icon(Icons.drive_file_rename_outline)), IconButton(tooltip: '生成视频截图', onPressed: busy ? null : makeThumbs, icon: const Icon(Icons.video_library_outlined)), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
         ])),
         if(busy) const LinearProgressIndicator(),
         Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('在相册或文件管理器选择文件\n点击分享 → File Hero\n\n选择新建文件夹或已有文件夹存入 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? Center(child: Text(query.trim().isEmpty ? '没有文件。请从其他应用分享文件到 File Hero。' : busy ? '正在搜索…' : '没有匹配的文件或文件夹')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),

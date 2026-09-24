@@ -113,6 +113,69 @@ class MainActivity : FlutterActivity() {
     }
     // The desktop app keeps video screenshots in a "thumbs" folder (listed under Thumbnails in file-readme.txt); it stays hidden here too.
     private fun isThumbs(f: DocumentFile): Boolean = f.isDirectory && f.name.equals("thumbs", true)
+    private fun isVideo(name: String?): Boolean = name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in listOf("mp4", "mov", "m4v", "3gp", "mkv", "webm", "avi")
+    // The same screenshots the desktop app makes: three 250x250 JPEGs at 25%, 50% and 75% of the video, the whole
+    // frame scaled to fit on black, in the folder's thumbs folder and listed under Thumbnails in file-readme.txt.
+    // Only videos without all three are done. counts = [made, failed].
+    private fun makeThumbs(dir: DocumentFile, only: Set<String>? = null, recursive: Boolean = false, counts: IntArray = intArrayOf(0, 0)): IntArray {
+        val files = dir.listFiles()
+        val batch = try { readBatch(dir) } catch(_: Exception) { null }
+        if(batch != null && files.none { it.name == "file-readme.txt.tmp" || it.name == "file-readme.txt.backup" }) {
+            var thumbs = files.firstOrNull { isThumbs(it) }
+            var changed = false
+            for(video in files) {
+                val name = video.name ?: continue
+                if(!video.isFile || !isVideo(name) || (only != null && name !in only)) continue
+                val listed = thumbList(batch.files[name])
+                val folder = thumbs
+                if(listed.size == 3 && folder != null && listed.all { it.startsWith("thumbs/") && folder.findFile(it.removePrefix("thumbs/"))?.isFile == true }) continue
+                val shots = try { videoShots(video.uri) } catch(_: Exception) { null }
+                if(shots == null) { counts[1]++; continue }
+                val target = thumbs ?: dir.createDirectory("thumbs") ?: error("无法建立 thumbs 文件夹")
+                thumbs = target
+                val names = shots.mapIndexed { i, jpeg ->
+                    val shotName = "$name-${i + 1}.jpg"
+                    val shot = target.findFile(shotName) ?: target.createFile("image/jpeg", shotName) ?: error("无法写入截图")
+                    contentResolver.openOutputStream(shot.uri, "wt")?.use { it.write(jpeg) } ?: error("无法写入截图")
+                    "thumbs/${shot.name}"
+                }
+                record(video, batch.files.getOrPut(name) { mutableMapOf() })["Thumbnails"] = names.joinToString(" | ")
+                changed = true; counts[0]++
+            }
+            if(changed) { try { writeBatch(dir, batch) } catch(_: ManifestCommittedException) {} }
+        }
+        if(recursive) for(sub in files) if(sub.isDirectory && !isThumbs(sub) && sub.name != ".file-hero") makeThumbs(sub, null, true, counts)
+        return counts
+    }
+    private fun videoShots(uri: Uri): List<ByteArray>? {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(this, uri)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: return null
+            if(duration <= 0) return null
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            val rawWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val rawHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            return listOf(0.25, 0.5, 0.75).map { at ->
+                val time = (duration * at * 1000).toLong()
+                var frame = (if(Build.VERSION.SDK_INT >= 27) retriever.getScaledFrameAtTime(time, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 500, 500) else retriever.getFrameAtTime(time, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)) ?: return null
+                // Some devices return a phone video's frame sideways, as stored; turn it the way players show it.
+                if(rotation % 180 != 0 && rawWidth != rawHeight && (frame.width > frame.height) == (rawWidth > rawHeight)) {
+                    frame = Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }, true)
+                }
+                letterbox(frame)
+            }
+        } finally { try { retriever.release() } catch(_: Exception) {} }
+    }
+    private fun letterbox(frame: Bitmap): ByteArray {
+        val size = 250
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLACK) }
+        val scale = minOf(size.toFloat() / frame.width, size.toFloat() / frame.height)
+        val width = Math.round(frame.width * scale); val height = Math.round(frame.height * scale)
+        val left = (size - width) / 2; val top = (size - height) / 2
+        android.graphics.Canvas(out).drawBitmap(frame, null, android.graphics.Rect(left, top, left + width, top + height), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        return ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+    }
     private fun thumbList(meta: Map<String,String>?): List<String> = meta?.get("Thumbnails")?.split(" | ")?.filter { it.isNotEmpty() } ?: emptyList()
     // The desktop app also puts 给AI的说明.md (instructions for describing videos) in the file-hero folder.
     private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" && !isThumbs(it) && !(dir.uri == root?.uri && it.name == "给AI的说明.md") }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
@@ -328,6 +391,7 @@ class MainActivity : FlutterActivity() {
                 "rename" -> renameEntry(path, file, call.argument<String>("name") ?: "")
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
+                "makeThumbs" -> { require(file.isDirectory) { "找不到文件夹" }; val counts = makeThumbs(file, recursive = true); mapOf("made" to counts[0], "failed" to counts[1]) }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(!name.equals("thumbs", true)) { "thumbs 是视频截图文件夹的保留名称" }; require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
                 "importSelected" -> importSelected(file, call.argument<String>("name") ?: "", call.argument<String>("description") ?: "", call.argument<Boolean>("existing") ?: false)
                 else -> error("Unknown method")
@@ -452,7 +516,7 @@ class MainActivity : FlutterActivity() {
             require(!occupied.contains("file-readme.txt.tmp") && !occupied.contains("file-readme.txt.backup")) { "请先恢复此文件夹内未完成写入的说明" }
             for((_, name) in sources) require(name.lowercase(Locale.ROOT) !in occupied) { "已有同名文件：$name。不会覆盖，请选择其他文件夹或新建文件夹" }
             val previous = batch.files.toMap(); batch.files.clear()
-            for(file in children) if(file.isFile && !file.name.equals("file-readme.txt", true)) {
+            for(file in children) if(file.isFile && !file.name.equals("file-readme.txt", true) && !(parent.uri == root?.uri && file.name == "给AI的说明.md")) {
                 val name = file.name ?: error("文件名不可读"); valid(name)
                 batch.files[name] = record(file, previous[name] ?: mutableMapOf())
             }
@@ -477,7 +541,9 @@ class MainActivity : FlutterActivity() {
             throw e
         }
         selectedSources = emptyList()
-        return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size, "path" to if(existing) "" else (dest.name ?: batchName), "warning" to warning)
+        // The files are stored; screenshots that cannot be made are only counted.
+        val shots = try { makeThumbs(dest, createdFiles.mapNotNull { it.name }.toSet()) } catch(_: Exception) { intArrayOf(0, 0) }
+        return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size, "path" to if(existing) "" else (dest.name ?: batchName), "warning" to warning, "thumbsMade" to shots[0], "thumbsFailed" to shots[1])
     }
     // Hands SSD files to the system Bluetooth sender (OPP), or to the share chooser when Bluetooth is unavailable.
     @Suppress("DEPRECATION")

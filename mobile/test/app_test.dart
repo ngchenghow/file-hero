@@ -31,13 +31,14 @@ void main() {
         case 'connect': if(pickInternal) { pickInternal = false; throw PlatformException(code: 'STORAGE', message: '所选位置不在 USB SSD 上'); } return cancelPicker ? null : '旅行资料';
         case 'importSelected':
           if(fail) { fail = false; throw PlatformException(code: 'ERROR', message: '已有同名文件'); }
-          return {'batch': '旅行资料', 'imported': 1, 'path': call.arguments['existing'] == true ? '' : '旅行资料', 'warning': ''};
+          return {'batch': '旅行资料', 'imported': 1, 'path': call.arguments['existing'] == true ? '' : '旅行资料', 'warning': '', 'thumbsMade': 1, 'thumbsFailed': 0};
         case 'delete':
           if(deleteFails) { return {'deleted': false, 'warning': '设备拒绝删除'}; }
           deleted = true; return {'deleted': true, 'warning': ''};
         case 'list': if(deleted) return <Object>[]; return [{'name': fileMode ? 'photo.jpg' : '旅行批次', 'directory': !fileMode, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
         case 'search': return [{'name': '京都.jpg', 'path': '旅行批次/第一天/京都.jpg', 'directory': false, 'size': 1024, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '清水寺'}}, {'name': '第一天', 'path': '旅行批次/第一天', 'directory': true, 'size': 1024, 'fileCount': 1, 'modified': '2026-09-23T10:00:00Z', 'metadata': {}}];
         case 'rename': return {'name': call.arguments['name'], 'warning': ''};
+        case 'makeThumbs': return {'made': 2, 'failed': 1};
         case 'thumbnail': return null;
         case 'open': return true;
         case 'export': if(cancelPicker) return null; return call.arguments['directory'] == true ? {'name': '旅行批次 (2)', 'files': 5} : true;
@@ -333,6 +334,12 @@ void main() {
     expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': '旅行批次', 'name': '京都之旅'});
     expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '京都之旅');
     expect(find.text('京都之旅'), findsOneWidget);
+  });
+  testWidgets('video screenshots can be made for the open folder and its subfolders', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('生成视频截图')); await advance(tester);
+    expect(calls.singleWhere((c) => c.method == 'makeThumbs').arguments['path'], '');
+    expect(find.text('已为 2 个视频生成截图。1 个视频无法截图（格式不支持或文件损坏）。'), findsOneWidget);
   });
   testWidgets('sending stops when SSD is missing', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
