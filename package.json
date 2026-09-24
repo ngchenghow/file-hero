@@ -1,6 +1,6 @@
 {
   "name": "file-hero",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "description": "Portable SSD file manager shared by Android and Windows, with per-batch readme metadata",
   "main": "desktop/main.cjs",
