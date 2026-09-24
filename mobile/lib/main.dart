@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -24,7 +25,9 @@ class _FilesPageState extends State<FilesPage> {
   bool connected = false, busy = false;
   String folder = '', driveName = '', query = '', message = idleMessage;
   static const idleMessage = '从相册或文件管理器分享文件到 File Hero。';
-  List<Map<String, dynamic>> entries = [];
+  List<Map<String, dynamic>> entries = [], results = [];
+  final searchText = TextEditingController();
+  Timer? searchTimer;
   final Map<String, Future<Uint8List?>> thumbnails = {};
   bool checkingShares = false, sharePending = false;
   final queuedShares = ValueNotifier<int>(0);
@@ -41,7 +44,7 @@ class _FilesPageState extends State<FilesPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) { if(mounted) { sharePending = true; checkShares(); } });
   }
   @override
-  void dispose() { channel.setMethodCallHandler(null); queuedShares.dispose(); super.dispose(); }
+  void dispose() { channel.setMethodCallHandler(null); searchTimer?.cancel(); searchText.dispose(); queuedShares.dispose(); super.dispose(); }
   Future<void> checkShares() async {
     if(!mounted || busy || checkingShares) return;
     checkingShares = true; sharePending = false;
@@ -93,7 +96,7 @@ class _FilesPageState extends State<FilesPage> {
       final status = Map<String,dynamic>.from(await call('ssdStatus') as Map);
       if(!mounted) return null;
       if(status['state'] != 'missing') return status;
-      setState(() { connected = false; driveName = ''; folder = ''; entries = []; thumbnails.clear(); message = '未检测到 SSD，已暂停存入'; });
+      setState(() { connected = false; driveName = ''; folder = ''; clearSearch(); entries = []; thumbnails.clear(); message = '未检测到 SSD，已暂停存入'; });
       final choice = await showDialog<String>(context: context, barrierDismissible: false, builder: (context) => AlertDialog(
         title: const Text('未检测到 SSD'),
         content: const Text('没有找到已授权的 USB SSD，存入已暂停，不会把文件存到手机里。\n\n1. 用 USB 线或转接头连接 SSD\n2. 等通知栏出现 USB 存储，或文件管理器能看到 SSD\n3. 点「重试」\n\n在你放弃之前，分享的文件会一直保留。'),
@@ -127,7 +130,7 @@ class _FilesPageState extends State<FilesPage> {
     if(await ensureSsd() == null) { if(mounted) { setState(() => message = '未检测到 SSD，已停止存入，未存入任何文件'); } return; }
     final target = await call('restoreTarget') as String?;
     if(!mounted) return;
-    setState(() { connected = target != null; driveName = target ?? ''; folder = ''; entries = []; thumbnails.clear(); });
+    setState(() { connected = target != null; driveName = target ?? ''; folder = ''; clearSearch(); entries = []; thumbnails.clear(); });
     var name = '分享-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-').split('.').first}';
     var description = '', mode = 'new';
     var existingReady = false;
@@ -148,7 +151,7 @@ class _FilesPageState extends State<FilesPage> {
         if(!mounted) return;
         if(changed != null) {
           existingReady = mode == 'existing';
-          setState(() { connected = true; driveName = changed; folder = ''; entries = []; });
+          setState(() { connected = true; driveName = changed; folder = ''; clearSearch(); entries = []; });
         }
         continue;
       }
@@ -177,6 +180,20 @@ class _FilesPageState extends State<FilesPage> {
     }
   }
   String child(String name) => folder.isEmpty ? name : '$folder/$name';
+  // Search results carry their full path; entries of the current folder only have a name.
+  String pathOf(Map<String,dynamic> file) => file['path'] as String? ?? child(file['name'] as String);
+  void clearSearch() { searchTimer?.cancel(); searchText.clear(); query = ''; results = []; }
+  void search(String value) {
+    setState(() { query = value; if(value.trim().isEmpty) results = []; });
+    searchTimer?.cancel();
+    if(value.trim().isNotEmpty) searchTimer = Timer(const Duration(milliseconds: 350), () => work(runSearch));
+  }
+  Future<void> runSearch() async {
+    final text = query.trim();
+    if(text.isEmpty) return;
+    final data = await call('search', {'query': text}) as List;
+    if(mounted && text == query.trim()) { setState(() { results = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '在「${folder.isEmpty ? '我的 SSD' : folder}」及所有子文件夹找到 ${results.length} 个项目${results.length >= 500 ? '（仅显示前 500 个）' : ''}'; }); }
+  }
   String size(int n) { if(n < 1024) return '$n B'; if(n < 1048576) return '${(n/1024).toStringAsFixed(1)} KB'; if(n < 1073741824) return '${(n/1048576).toStringAsFixed(1)} MB'; return '${(n/1073741824).toStringAsFixed(1)} GB'; }
   Future<dynamic> call(String method, [Map<String, dynamic> values = const {}]) => channel.invokeMethod(method, {'path': folder, ...values});
   Future<void> work(Future<void> Function() action) async {
@@ -192,14 +209,17 @@ class _FilesPageState extends State<FilesPage> {
   Future<void> load([String? target]) async {
     final path = target ?? folder;
     final data = await call('list', {'path': path}) as List;
-    if(mounted) { setState(() { folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; }); }
+    if(!mounted) return;
+    final moved = path != folder;
+    setState(() { if(moved) clearSearch(); folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; });
+    if(!moved && query.trim().isNotEmpty) await runSearch();
   }
   Future<String?> textPrompt(String title, {String initial = ''}) async {
     return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
   }
   Future<void> deleteEntry(Map<String,dynamic> file) async {
     final name = file['name'] as String;
-    final path = child(name);
+    final path = pathOf(file);
     final directory = file['directory'] == true;
     await work(() async {
       final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
@@ -227,28 +247,40 @@ class _FilesPageState extends State<FilesPage> {
     ])))));
     if(!mounted || action == null) return;
     if(action == 'open') {
-      await work(() async { await call('open', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = '已打开「${file['name']}」'); } });
+      await work(() async { await call('open', {'path': pathOf(file)}); if(mounted) { setState(() => message = '已打开「${file['name']}」'); } });
     } else if(action == 'send') {
       await sendMenu(file);
     } else if(action == 'describe') {
       final description = await textPrompt('文件描述', initial: meta['Description'] as String? ?? '');
-      if(description != null) { await work(() async { await call('describe', {'path': child(file['name'] as String), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
-    } else { await work(() async { final result = await call('export', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = result == true ? '已导出文件副本' : '已取消导出'); } }); }
+      if(description != null) { await work(() async { await call('describe', {'path': pathOf(file), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
+    } else { await exportCopy(file); }
+  }
+  // Files are saved through the system "save as" picker; folders are copied (with subfolders) into a picked folder.
+  Future<void> exportCopy(Map<String,dynamic> file) async {
+    final directory = file['directory'] == true;
+    await work(() async {
+      final result = await call('export', {'path': pathOf(file), 'directory': directory});
+      if(!mounted) return;
+      setState(() => message = result == null ? '已取消导出'
+        : directory ? '已导出文件夹「${(result as Map)['name']}」（${result['files']} 个文件）' : '已导出文件副本');
+    });
   }
   Future<void> sendMenu(Map<String,dynamic> file) async {
     final name = file['name'] as String;
     final directory = file['directory'] == true;
     final via = await showModalBottomSheet<String>(context: context, builder: (context) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      ListTile(title: Text('导出「$name」到其他设备'), subtitle: Text(directory ? '发送此文件夹内的全部文件，包括说明 file-readme.txt（不含子文件夹）' : '发送的是副本，SSD 上的文件保持不变')),
-      ListTile(leading: const Icon(Icons.bluetooth), title: const Text('蓝牙发送'), subtitle: const Text('选择已配对或附近的设备；对方需开启蓝牙并接受文件'), onTap: () => Navigator.pop(context, 'bluetooth')),
+      ListTile(title: Text('导出「$name」'), subtitle: const Text('导出的是副本，SSD 上的原件保持不变')),
+      ListTile(leading: const Icon(Icons.download_outlined), title: Text(directory ? '导出文件夹副本' : '导出文件副本'), subtitle: Text(directory ? '选择手机或其他存储上的位置，复制整个文件夹（包括子文件夹）' : '选择手机或其他存储上的保存位置'), onTap: () => Navigator.pop(context, 'copy')),
+      ListTile(leading: const Icon(Icons.bluetooth), title: const Text('蓝牙发送'), subtitle: Text('选择已配对或附近的设备；对方需开启蓝牙并接受文件${directory ? '。只发送此文件夹内的文件和 file-readme.txt，不含子文件夹' : ''}'), onTap: () => Navigator.pop(context, 'bluetooth')),
       ListTile(leading: const Icon(Icons.share_outlined), title: const Text('其他方式发送'), subtitle: const Text('附近分享、聊天软件等'), onTap: () => Navigator.pop(context, 'chooser')),
     ])));
     if(!mounted || via == null) return;
+    if(via == 'copy') { await exportCopy(file); return; }
     await work(() async {
       final status = await call('ssdStatus') as Map?;
       if(!mounted) return;
       if(status?['state'] == 'missing') { setState(() => message = '未检测到 SSD，无法发送。请连接 SSD 后重试。'); return; }
-      final result = Map<String,dynamic>.from(await call('send', {'path': child(name), 'directory': directory, 'via': via}) as Map);
+      final result = Map<String,dynamic>.from(await call('send', {'path': pathOf(file), 'directory': directory, 'via': via}) as Map);
       if(!mounted) return;
       final count = result['files'];
       setState(() => message = result['via'] == 'bluetooth'
@@ -259,10 +291,11 @@ class _FilesPageState extends State<FilesPage> {
   Widget preview(Map<String,dynamic> file) {
     final name = file['name'] as String;
     final directory = file['directory'] == true;
+    final path = pathOf(file);
     final icon = directory ? Icons.folder_outlined : name.toLowerCase().endsWith('.pdf') ? Icons.picture_as_pdf_outlined : Icons.description_outlined;
     final fallback = Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 34, color: const Color(0xff528a67)), const SizedBox(height: 5), Text(directory ? '文件夹' : name.split('.').last.toUpperCase().characters.take(8).toString(), maxLines: 1, style: const TextStyle(fontSize: 10, color: Color(0xff6b8577)))]);
-    return Container(key: ValueKey('preview-$name'), width: 96, height: 96, clipBehavior: Clip.antiAlias, decoration: BoxDecoration(color: const Color(0xffeaf1ec), borderRadius: BorderRadius.circular(10)), child: FutureBuilder<Uint8List?>(
-      future: thumbnails.putIfAbsent(child(name), () async { try { return await channel.invokeMethod<Uint8List>('thumbnail', {'path': child(name)}); } catch(_) { return null; } }),
+    return Container(key: ValueKey('preview-$path'), width: 96, height: 96, clipBehavior: Clip.antiAlias, decoration: BoxDecoration(color: const Color(0xffeaf1ec), borderRadius: BorderRadius.circular(10)), child: FutureBuilder<Uint8List?>(
+      future: thumbnails.putIfAbsent(path, () async { try { return await channel.invokeMethod<Uint8List>('thumbnail', {'path': path}); } catch(_) { return null; } }),
       builder: (context, snapshot) => snapshot.data == null ? fallback : Image.memory(snapshot.data!, fit: BoxFit.contain, gaplessPlayback: true, errorBuilder: (context, error, stackTrace) => fallback),
     ));
   }
@@ -270,35 +303,40 @@ class _FilesPageState extends State<FilesPage> {
     final directory = file['directory'] == true;
     final metadata = Map<String,dynamic>.from(file['metadata'] as Map? ?? {});
     final description = (metadata['Description'] as String? ?? '').trim();
+    final location = file['path'] == null ? null : (file['path'] as String).split('/').reversed.skip(1).toList().reversed.join('/');
     return Card(margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5), elevation: 0, color: Colors.white, child: InkWell(
       borderRadius: BorderRadius.circular(12),
-      onTap: busy ? null : () { if(directory) { work(() => load(child(file['name'] as String))); } else { detail(file); } },
+      onTap: busy ? null : () { if(directory) { work(() => load(pathOf(file))); } else { detail(file); } },
       child: Padding(padding: const EdgeInsets.all(12), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         preview(file), const SizedBox(width: 14),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(file['name'] as String, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if(directory) const Padding(padding: EdgeInsets.only(right: 6), child: Icon(Icons.folder, key: ValueKey('folder-icon'), size: 20, color: Color(0xffd9a441))),
+            Expanded(child: Text(file['name'] as String, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+          ]),
+          if(location != null) Padding(padding: const EdgeInsets.only(top: 3), child: Text('位于：${location.isEmpty ? '我的 SSD' : location}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Color(0xff528a67)))),
           const SizedBox(height: 7),
           Text(description.isEmpty ? directory ? '暂无批次描述' : '暂无描述，点击添加' : description, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: description.isEmpty ? Colors.grey : const Color(0xff395345))),
           const SizedBox(height: 9),
           Text(directory ? '${file['fileCount'] ?? '—'} 个文件 · ${size((file['size'] as num).toInt())}' : size((file['size'] as num).toInt()), style: const TextStyle(fontSize: 11, color: Colors.grey)),
           Text('日期：${(file['modified'] as String? ?? 'unknown').split('T').first}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
         ])),
-        IconButton(tooltip: '发送 ${file['name']}', onPressed: busy ? null : () => sendMenu(file), icon: const Icon(Icons.bluetooth)),
+        IconButton(tooltip: '导出 ${file['name']}', onPressed: busy ? null : () => sendMenu(file), icon: const Icon(Icons.ios_share)),
         IconButton(tooltip: '删除 ${file['name']}', onPressed: busy ? null : () => deleteEntry(file), icon: const Icon(Icons.delete_outline), color: Theme.of(context).colorScheme.error),
       ])),
     ));
   }
   @override
   Widget build(BuildContext context) {
-    final visible = entries.where((e) => (e['name'] as String).toLowerCase().contains(query.toLowerCase())).toList();
+    final visible = query.trim().isEmpty ? entries : results;
     return Scaffold(
       appBar: AppBar(title: const Text('file-hero', style: TextStyle(fontWeight: FontWeight.w700))),
       body: Column(children: [
-        Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('每份文件，都有故事。', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 8), Text(connected ? driveName : '你的 SSD 随身文件库', style: const TextStyle(color: Color(0xff528a67))), const SizedBox(height: 16), TextField(decoration: const InputDecoration(hintText: '搜索当前文件夹', prefixIcon: Icon(Icons.search), filled: true, border: OutlineInputBorder(borderSide: BorderSide.none)), onChanged: (value) => setState(() => query = value)),
+        Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('每份文件，都有故事。', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 8), Text(connected ? driveName : '你的 SSD 随身文件库', style: const TextStyle(color: Color(0xff528a67))), const SizedBox(height: 16), TextField(controller: searchText, decoration: InputDecoration(hintText: '搜索当前文件夹及子文件夹', prefixIcon: const Icon(Icons.search), suffixIcon: query.isEmpty ? null : IconButton(tooltip: '清除搜索', onPressed: () => setState(clearSearch), icon: const Icon(Icons.close)), filled: true, border: const OutlineInputBorder(borderSide: BorderSide.none)), onChanged: search),
           if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
         ])),
         if(busy) const LinearProgressIndicator(),
-        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('在相册或文件管理器选择文件\n点击分享 → File Hero\n\n选择新建文件夹或已有文件夹存入 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? const Center(child: Text('没有文件。请从其他应用分享文件到 File Hero。')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
+        Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('在相册或文件管理器选择文件\n点击分享 → File Hero\n\n选择新建文件夹或已有文件夹存入 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? Center(child: Text(query.trim().isEmpty ? '没有文件。请从其他应用分享文件到 File Hero。' : busy ? '正在搜索…' : '没有匹配的文件或文件夹')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
         Padding(padding: const EdgeInsets.all(16), child: Text(message, style: const TextStyle(fontSize: 12), maxLines: 4)),
 
       ]),

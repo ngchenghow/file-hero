@@ -111,6 +111,9 @@ class MainActivity : FlutterActivity() {
         if(batch.files.isNotEmpty() || batch.header.isNotEmpty()) writeBatch(dir, batch)
         return n
     }
+    private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
+    private fun entry(f: DocumentFile, meta: Map<String,String>): Map<String,Any?> =
+        mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
     private fun background(result: MethodChannel.Result, fn: () -> Any?) {
         worker.execute { try { val value = fn(); runOnUiThread { active = false; result.success(value) } } catch(e: Exception) { runOnUiThread { active = false; result.error("STORAGE", e.message, null) } } }
     }
@@ -284,7 +287,8 @@ class MainActivity : FlutterActivity() {
                     "connect" -> Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                         .also { intent -> if(Build.VERSION.SDK_INT >= 26) pickerStart(selectingExisting)?.let { intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) } }
                     "pickFiles" -> { selectedSources = emptyList(); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
-                    else -> { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, path.substringAfterLast('/')) }
+                    else -> if(call.argument<Boolean>("directory") == true) { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+                    else { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, path.substringAfterLast('/')) }
                 }
                 startActivityForResult(intent, 100)
             } catch(e: Exception) { pending = null; active = false; result.error("STORAGE", e.message, null) }
@@ -295,10 +299,26 @@ class MainActivity : FlutterActivity() {
             when(call.method) {
                 "list" -> {
                     require(file.isDirectory && file.canRead()) { "无法读取文件夹" }
-                    file.listFiles().filter { it.name != ".file-hero" }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name }).map { f ->
-                        val meta = if(f.isDirectory) readBatch(f, false).header else if(f.isFile) readMeta(f) else emptyMap<String,String>()
-                        mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
+                    children(file).map { f -> entry(f, if(f.isDirectory) readBatch(f, false).header else if(f.isFile) readMeta(f) else emptyMap()) }
+                }
+                "search" -> {
+                    require(file.isDirectory && file.canRead()) { "无法读取文件夹" }
+                    val query = (call.argument<String>("query") ?: "").trim().lowercase(Locale.ROOT)
+                    require(query.isNotEmpty()) { "请输入搜索内容" }
+                    // Walk every subfolder, reading each file-readme.txt once so descriptions are searchable too.
+                    val found = mutableListOf<Map<String,Any?>>()
+                    fun walk(dir: DocumentFile, relative: String, batch: Batch) {
+                        for(f in children(dir)) {
+                            if(found.size >= 500) return
+                            val name = f.name ?: continue
+                            val itemPath = if(relative.isEmpty()) name else "$relative/$name"
+                            val sub = if(f.isDirectory) readBatch(f, false) else null
+                            val meta = sub?.header ?: (if(name.equals("file-readme.txt", true)) batch.header else batch.files[name])?.let { if(it.isEmpty()) it else it + ("Format" to "file-hero/batch-v1") } ?: emptyMap()
+                            if(name.lowercase(Locale.ROOT).contains(query) || (meta["Description"] ?: "").lowercase(Locale.ROOT).contains(query)) found += entry(f, meta) + ("path" to itemPath)
+                            if(sub != null) walk(f, itemPath, sub)
+                        }
                     }
+                    walk(file, path, readBatch(file, false)); found
                 }
                 "delete" -> deleteEntry(path, file, call.argument<Boolean>("directory") ?: error("缺少类型"))
                 "index" -> { require(file.isDirectory); index(file) }
@@ -341,7 +361,7 @@ class MainActivity : FlutterActivity() {
                     selectedSources = sources
                     sources.map { it.second }
                 }
-                "export" -> { val src = resolve(path); require(src.isFile); require(src.uri != uri) { "不能覆盖源文件" }; copy(src.uri, uri); true }
+                "export" -> { val src = resolve(path); if(src.isDirectory) exportFolder(src, uri) else { require(src.isFile); require(src.uri != uri) { "不能覆盖源文件" }; copy(src.uri, uri); true } }
                 else -> error("Unknown result")
             }
         }
@@ -428,6 +448,37 @@ class MainActivity : FlutterActivity() {
             }
         }
         return Triple(Intent.createChooser(send, "发送到其他设备"), "chooser", files.size)
+    }
+    // Copies a whole SSD folder (subfolders included) into a new folder inside the picked destination.
+    private fun exportFolder(src: DocumentFile, tree: Uri): Map<String,Any> {
+        val dest = DocumentFile.fromTreeUri(this, tree) ?: error("无法打开目标文件夹")
+        require(dest.isDirectory && dest.canWrite()) { "目标文件夹不可写" }
+        // List everything before writing, so a destination inside the source folder is never copied into itself.
+        val plan = mutableListOf<Pair<String,DocumentFile?>>()
+        fun walk(dir: DocumentFile, relative: String) {
+            for(f in dir.listFiles().sortedBy { it.name }) {
+                val name = f.name ?: continue
+                if(name == ".file-hero" || name in listOf("file-readme.txt.tmp", "file-readme.txt.backup")) continue
+                val itemPath = if(relative.isEmpty()) name else "$relative/$name"
+                if(f.isDirectory) { plan += itemPath to null; walk(f, itemPath) } else if(f.isFile) plan += itemPath to f
+            }
+        }
+        walk(src, "")
+        val base = src.name ?: "file-hero"
+        val taken = dest.listFiles().mapNotNull { it.name?.lowercase(Locale.ROOT) }.toSet()
+        var name = base; var n = 2
+        while(name.lowercase(Locale.ROOT) in taken) name = "$base (${n++})"
+        val top = dest.createDirectory(name) ?: error("无法在目标位置创建文件夹")
+        val folders = mutableMapOf("" to top)
+        var files = 0
+        for((itemPath, file) in plan) {
+            val parent = folders[itemPath.substringBeforeLast('/', "")] ?: error("无法创建子文件夹")
+            val leaf = itemPath.substringAfterLast('/')
+            if(file == null) { folders[itemPath] = parent.createDirectory(leaf) ?: error("无法创建子文件夹：$leaf"); continue }
+            val created = parent.createFile("application/octet-stream", leaf) ?: error("无法创建文件：$leaf")
+            copy(file.uri, created.uri); files++
+        }
+        return mapOf("name" to (top.name ?: name), "files" to files)
     }
     private fun copy(source: Uri, target: Uri) {
         contentResolver.openInputStream(source)?.use { input -> contentResolver.openOutputStream(target, "wt")?.use { output -> input.copyTo(output, 1024 * 1024) } ?: error("无法写入目标") } ?: error("无法读取源文件")

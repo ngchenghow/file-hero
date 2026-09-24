@@ -34,8 +34,10 @@ void main() {
           if(deleteFails) { return {'deleted': false, 'warning': '设备拒绝删除'}; }
           deleted = true; return {'deleted': true, 'warning': ''};
         case 'list': if(deleted) return <Object>[]; return [{'name': fileMode ? 'photo.jpg' : '旅行批次', 'directory': !fileMode, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
+        case 'search': return [{'name': '京都.jpg', 'path': '旅行批次/第一天/京都.jpg', 'directory': false, 'size': 1024, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '清水寺'}}, {'name': '第一天', 'path': '旅行批次/第一天', 'directory': true, 'size': 1024, 'fileCount': 1, 'modified': '2026-09-23T10:00:00Z', 'metadata': {}}];
         case 'thumbnail': return null;
         case 'open': return true;
+        case 'export': if(cancelPicker) return null; return call.arguments['directory'] == true ? {'name': '旅行批次 (2)', 'files': 5} : true;
         case 'send': return {'via': call.arguments['via'], 'files': call.arguments['directory'] == true ? 3 : 1};
         default: throw PlatformException(code: 'UNEXPECTED', message: call.method);
       }
@@ -53,6 +55,23 @@ void main() {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     expect(find.text('2 个文件 · 2.0 KB'), findsOneWidget);
     expect(tester.getRect(find.byKey(const ValueKey('preview-旅行批次'))).right, lessThan(tester.getRect(find.text('京都照片和票据')).left));
+  });
+  testWidgets('folders show a folder icon beside the title and files do not', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(tester.getRect(find.byKey(const ValueKey('folder-icon'))).right, lessThanOrEqualTo(tester.getRect(find.text('旅行批次')).left));
+    fileMode = true; await tester.tap(find.byTooltip('刷新')); await advance(tester);
+    expect(find.byKey(const ValueKey('folder-icon')), findsNothing);
+  });
+  testWidgets('search looks through all subfolders and opens results by full path', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.enterText(find.byType(TextField).first, '京都'); await advance(tester);
+    expect(calls.lastWhere((c) => c.method == 'search').arguments, {'path': '', 'query': '京都'});
+    expect(find.text('京都.jpg'), findsOneWidget);
+    expect(find.text('位于：旅行批次/第一天'), findsOneWidget);
+    expect(find.text('旅行批次'), findsNothing);
+    await tester.tap(find.text('第一天')); await advance(tester);
+    expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '旅行批次/第一天');
+    expect(find.text('旅行批次'), findsOneWidget);
   });
   testWidgets('new folder sends name description and explicit new mode', (tester) async {
     target = 'SSD'; shared = true;
@@ -233,12 +252,23 @@ void main() {
   });
   testWidgets('folder can be sent over Bluetooth', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
-    await tester.tap(find.byTooltip('发送 旅行批次')); await advance(tester);
+    await tester.tap(find.byTooltip('导出 旅行批次')); await advance(tester);
     expect(find.textContaining('包括说明 file-readme.txt'), findsOneWidget);
     await tester.tap(find.text('蓝牙发送')); await advance(tester);
     final data = calls.singleWhere((c) => c.method == 'send').arguments;
     expect(data['path'], '旅行批次'); expect(data['directory'], true); expect(data['via'], 'bluetooth');
     expect(find.textContaining('已打开蓝牙发送（3 个文件）'), findsOneWidget);
+  });
+  testWidgets('folder export copies the whole folder to a picked location', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.byTooltip('导出 旅行批次')); await advance(tester);
+    await tester.tap(find.text('导出文件夹副本')); await advance(tester);
+    expect(calls.lastWhere((c) => c.method == 'export').arguments, {'path': '旅行批次', 'directory': true});
+    expect(find.text('已导出文件夹「旅行批次 (2)」（5 个文件）'), findsOneWidget);
+    cancelPicker = true;
+    await tester.tap(find.byTooltip('导出 旅行批次')); await advance(tester);
+    await tester.tap(find.text('导出文件夹副本')); await advance(tester);
+    expect(find.text('已取消导出'), findsOneWidget);
   });
   testWidgets('file export sheet offers Bluetooth and other senders', (tester) async {
     target = 'SSD'; fileMode = true;
@@ -261,7 +291,7 @@ void main() {
   testWidgets('sending stops when SSD is missing', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     ssdMissing = true;
-    await tester.tap(find.byTooltip('发送 旅行批次')); await advance(tester);
+    await tester.tap(find.byTooltip('导出 旅行批次')); await advance(tester);
     await tester.tap(find.text('蓝牙发送')); await advance(tester);
     expect(calls.where((c) => c.method == 'send'), isEmpty);
     expect(find.text('未检测到 SSD，无法发送。请连接 SSD 后重试。'), findsOneWidget);
