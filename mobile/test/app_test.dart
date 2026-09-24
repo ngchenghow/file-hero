@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_hero/main.dart';
 
+// The rename dialog's field; the home page's search box is a TextField too.
+final nameField = find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField));
 Future<void> advance(WidgetTester tester) async {
   for (var i = 0; i < 3; i++) { await tester.pump(const Duration(milliseconds: 500)); }
 }
@@ -254,7 +256,7 @@ void main() {
   testWidgets('folder can be sent over Bluetooth', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     await tester.tap(find.byTooltip('导出 旅行批次')); await advance(tester);
-    expect(find.textContaining('包括说明 file-readme.txt'), findsOneWidget);
+    expect(find.textContaining('只发送此文件夹内的文件和 file-readme.txt'), findsOneWidget);
     await tester.tap(find.text('蓝牙发送')); await advance(tester);
     final data = calls.singleWhere((c) => c.method == 'send').arguments;
     expect(data['path'], '旅行批次'); expect(data['directory'], true); expect(data['via'], 'bluetooth');
@@ -296,9 +298,9 @@ void main() {
     await tester.ensureVisible(find.text('重命名'));
     await tester.tap(find.text('重命名')); await advance(tester);
     expect(find.text('重命名文件'), findsOneWidget);
-    final field = tester.widget<TextField>(find.byType(TextField));
+    final field = tester.widget<TextField>(nameField);
     expect(field.controller!.selection, const TextSelection(baseOffset: 0, extentOffset: 5));
-    await tester.enterText(find.byType(TextField), '京都.jpg');
+    await tester.enterText(nameField, '京都.jpg');
     await tester.tap(find.widgetWithText(FilledButton, '重命名')); await advance(tester);
     expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': 'photo.jpg', 'name': '京都.jpg'});
     expect(find.text('已重命名为「京都.jpg」。'), findsOneWidget);
@@ -315,7 +317,7 @@ void main() {
   testWidgets('long-pressing a folder renames it', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     await tester.longPress(find.text('旅行批次')); await advance(tester);
-    await tester.enterText(find.byType(TextField), '京都之旅');
+    await tester.enterText(nameField, '京都之旅');
     await tester.testTextInput.receiveAction(TextInputAction.done); await advance(tester);
     expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': '旅行批次', 'name': '京都之旅'});
     expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '');
@@ -325,7 +327,7 @@ void main() {
     expect(find.byTooltip('重命名此文件夹'), findsNothing);
     await tester.tap(find.text('旅行批次')); await advance(tester);
     await tester.tap(find.byTooltip('重命名此文件夹')); await advance(tester);
-    await tester.enterText(find.byType(TextField), '京都之旅');
+    await tester.enterText(nameField, '京都之旅');
     await tester.tap(find.widgetWithText(FilledButton, '重命名')); await advance(tester);
     expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': '旅行批次', 'name': '京都之旅'});
     expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '京都之旅');
