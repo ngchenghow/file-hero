@@ -104,7 +104,7 @@ class MainActivity : FlutterActivity() {
     }
     private fun index(dir: DocumentFile): Int {
         var n = 0; val batch = readBatch(dir); val previous = batch.files.toMap(); batch.files.clear()
-        for(file in dir.listFiles()) if(file.name != ".file-hero" && !isThumbs(file)) {
+        for(file in dir.listFiles()) if(file.name != ".file-hero" && !isThumbs(file) && !(dir.uri == root?.uri && file.name == "给AI的说明.md")) {
             if(file.isDirectory) n += index(file)
             else if(file.isFile && !file.name.equals("file-readme.txt", true) && file.name !in listOf("file-readme.txt.tmp", "file-readme.txt.backup")) { batch.files[file.name!!] = record(file, previous[file.name] ?: mutableMapOf()); n++ }
         }
@@ -114,7 +114,8 @@ class MainActivity : FlutterActivity() {
     // The desktop app keeps video screenshots in a "thumbs" folder (listed under Thumbnails in file-readme.txt); it stays hidden here too.
     private fun isThumbs(f: DocumentFile): Boolean = f.isDirectory && f.name.equals("thumbs", true)
     private fun thumbList(meta: Map<String,String>?): List<String> = meta?.get("Thumbnails")?.split(" | ")?.filter { it.isNotEmpty() } ?: emptyList()
-    private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" && !isThumbs(it) }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
+    // The desktop app also puts 给AI的说明.md (instructions for describing videos) in the file-hero folder.
+    private fun children(dir: DocumentFile): List<DocumentFile> = dir.listFiles().filter { it.name != ".file-hero" && !isThumbs(it) && !(dir.uri == root?.uri && it.name == "给AI的说明.md") }.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name })
     private fun entry(f: DocumentFile, meta: Map<String,String>): Map<String,Any?> =
         mapOf("name" to (f.name ?: ""), "directory" to f.isDirectory, "size" to if(f.isDirectory) (meta["Size-Bytes"]?.toLongOrNull() ?: 0L) else f.length(), "fileCount" to (meta["File-Count"]?.toLongOrNull()), "modified" to ((if(f.isDirectory) meta["Last-Stored-UTC"] else null) ?: utc(f.lastModified())), "metadata" to meta)
     private fun background(result: MethodChannel.Result, fn: () -> Any?) {
