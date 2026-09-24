@@ -96,13 +96,7 @@ class _FilesPageState extends State<FilesPage> {
       setState(() { connected = false; driveName = ''; folder = ''; entries = []; thumbnails.clear(); message = '未检测到 SSD，已暂停存入'; });
       final choice = await showDialog<String>(context: context, barrierDismissible: false, builder: (context) => AlertDialog(
         title: const Text('未检测到 SSD'),
-        content: const Text('没有找到已授权的 USB SSD，存入已暂停，不会把文件存到手机里。
-
-1. 用 USB 线或转接头连接 SSD
-2. 等通知栏出现 USB 存储，或文件管理器能看到 SSD
-3. 点「重试」
-
-在你放弃之前，分享的文件会一直保留。'),
+        content: const Text('没有找到已授权的 USB SSD，存入已暂停，不会把文件存到手机里。\n\n1. 用 USB 线或转接头连接 SSD\n2. 等通知栏出现 USB 存储，或文件管理器能看到 SSD\n3. 点「重试」\n\n在你放弃之前，分享的文件会一直保留。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, 'cancel'), child: const Text('放弃这批')),
           if(status['other'] == true) TextButton(onPressed: () => Navigator.pop(context, 'other'), child: const Text('改用其他 SSD')),
