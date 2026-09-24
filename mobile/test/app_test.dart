@@ -12,9 +12,10 @@ void main() {
   late List<MethodCall> calls;
   late bool shared, fail, cancelPicker, deleted, fileMode, deleteFails;
   late int shareErrors, queued;
+  late bool ssdMissing, pickInternal;
   String? target;
   setUp(() {
-    shareErrors = 0; queued = 0; deleted = false; fileMode = false; deleteFails = false; calls = []; shared = false; fail = false; cancelPicker = false; target = null;
+    shareErrors = 0; queued = 0; ssdMissing = false; pickInternal = false; deleted = false; fileMode = false; deleteFails = false; calls = []; shared = false; fail = false; cancelPicker = false; target = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       switch(call.method) {
@@ -23,8 +24,9 @@ void main() {
           if(shareErrors > 0) { shareErrors--; throw PlatformException(code: 'SHARE', message: '无法读取源文件', details: true); }
           shared = false; return {'files': ['photo.jpg'], 'pending': queued};
         case 'discardShare': shared = false; return 0;
-        case 'restoreTarget': return target;
-        case 'connect': return cancelPicker ? null : '旅行资料';
+        case 'ssdStatus': return {'state': ssdMissing ? 'missing' : target == null ? 'unauthorized' : 'ready', 'name': target ?? '', 'other': false};
+        case 'restoreTarget': return ssdMissing ? null : target;
+        case 'connect': if(pickInternal) { pickInternal = false; throw PlatformException(code: 'STORAGE', message: '所选位置不在 USB SSD 上'); } return cancelPicker ? null : '旅行资料';
         case 'importSelected':
           if(fail) { fail = false; throw PlatformException(code: 'ERROR', message: '已有同名文件'); }
           return {'batch': '旅行资料', 'imported': 1, 'path': call.arguments['existing'] == true ? '' : '旅行资料', 'warning': ''};
@@ -168,5 +170,40 @@ void main() {
     target = 'SSD'; shared = true; queued = 2;
     await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     expect(find.text('另有 2 批分享在排队，处理完这批后会继续'), findsOneWidget);
+  });
+  testWidgets('missing SSD stops share before choosing a folder', (tester) async {
+    target = 'SSD'; shared = true; ssdMissing = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.text('未检测到 SSD'), findsOneWidget);
+    expect(find.text('分享文件存入 SSD'), findsNothing);
+    await tester.tap(find.text('放弃这批')); await advance(tester);
+    expect(find.text('未检测到 SSD，已停止存入，未存入任何文件'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'connect' || c.method == 'importSelected'), isEmpty);
+  });
+  testWidgets('plugging SSD in and retrying continues the share', (tester) async {
+    target = 'SSD'; shared = true; ssdMissing = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    ssdMissing = false;
+    await tester.tap(find.text('重试')); await advance(tester);
+    expect(find.text('分享文件存入 SSD'), findsOneWidget);
+  });
+  testWidgets('SSD unplugged while dialog is open stops before writing', (tester) async {
+    target = 'SSD'; shared = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    ssdMissing = true;
+    await tester.tap(find.text('存入')); await advance(tester);
+    expect(find.text('未检测到 SSD'), findsOneWidget);
+    await tester.tap(find.text('放弃这批')); await advance(tester);
+    expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
+  });
+  testWidgets('picking a folder outside the SSD is explained and retried', (tester) async {
+    target = 'SSD'; shared = true; pickInternal = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('已有文件夹')); await advance(tester);
+    await tester.tap(find.text('选择已有文件夹')); await advance(tester);
+    expect(find.text('所选位置不在 USB SSD 上'), findsOneWidget);
+    await tester.tap(find.text('重新选择')); await advance(tester);
+    expect(find.text('分享文件存入 SSD'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
   });
 }

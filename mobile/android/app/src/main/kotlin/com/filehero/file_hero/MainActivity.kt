@@ -10,6 +10,9 @@ import android.graphics.pdf.PdfRenderer
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import android.util.Size
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
@@ -144,6 +147,32 @@ class MainActivity : FlutterActivity() {
         valid(candidate)
         return candidate
     }
+    // Mounted removable volumes (USB SSD) by UUID; the tree document id of a SAF folder starts with that UUID.
+    private fun removableVolumes(): Set<String>? {
+        if(Build.VERSION.SDK_INT < 24) return null
+        return getSystemService(StorageManager::class.java).storageVolumes.filter { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }.mapNotNull { it.uuid?.uppercase(Locale.ROOT) }.toSet()
+    }
+    private fun volumeOf(tree: Uri): String? = try {
+        if(tree.authority == "com.android.externalstorage.documents") DocumentsContract.getTreeDocumentId(tree).substringBefore(':').uppercase(Locale.ROOT) else null
+    } catch(_: Exception) { null }
+    private fun onSsd(tree: Uri): Boolean {
+        val volume = volumeOf(tree) ?: return false
+        return volume != "PRIMARY" && removableVolumes()?.contains(volume) ?: true
+    }
+    private fun ssdStatus(): Map<String,Any> {
+        val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)?.let { Uri.parse(it) }
+        val volumes = removableVolumes()
+        if(saved != null && onSsd(saved)) {
+            val tree = try { DocumentFile.fromTreeUri(this, saved) } catch(_: Exception) { null }
+            if(tree != null && tree.canRead() && tree.canWrite()) return mapOf("state" to "ready", "name" to (tree.name ?: "SSD"))
+            return mapOf("state" to "unauthorized", "name" to "", "other" to true)
+        }
+        // A saved SSD whose volume is gone, or no removable volume at all, means the drive is not plugged in.
+        // "other" tells the UI another removable drive is present and may be authorized instead.
+        val other = volumes?.isNotEmpty() ?: true
+        val savedMissing = saved != null && volumeOf(saved)?.let { it != "PRIMARY" } == true
+        return mapOf("state" to if(savedMissing || !other) "missing" else "unauthorized", "name" to "", "other" to other)
+    }
     private fun sourceFiles(uris: List<Uri>): List<Pair<Uri,String>> {
         require(uris.isNotEmpty()) { "分享中没有可读取的文件，请从相册或文件管理器分享文件" }
         val names = mutableSetOf<String>()
@@ -182,11 +211,12 @@ class MainActivity : FlutterActivity() {
             return
         }
         if(call.method == "discardShare") { sharedBatches.pollFirst(); active = false; result.success(sharedBatches.size); return }
+        if(call.method == "ssdStatus") { background(result) { ssdStatus() }; return }
         if(call.method == "restoreTarget") {
             background(result) {
                 try {
                     val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)
-                    val candidate = saved?.let { DocumentFile.fromTreeUri(this, Uri.parse(it)) }
+                    val candidate = saved?.let { Uri.parse(it) }?.takeIf { onSsd(it) }?.let { DocumentFile.fromTreeUri(this, it) }
                     if(candidate != null && candidate.canRead() && candidate.canWrite()) { root = candidate; candidate.name ?: "SSD" } else null
                 } catch(_: Exception) { root = null; null }
             }
@@ -239,6 +269,7 @@ class MainActivity : FlutterActivity() {
         background(result) {
             when(kind) {
                 "connect" -> {
+                    require(onSsd(uri)) { "所选位置不在 USB SSD 上。请在选择器左侧菜单中点选 SSD，再选择文件夹。" }
                     val flags = (data?.flags ?: 0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")

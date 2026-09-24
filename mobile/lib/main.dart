@@ -22,7 +22,8 @@ class FilesPage extends StatefulWidget {
 class _FilesPageState extends State<FilesPage> {
   static const channel = MethodChannel('com.filehero/storage');
   bool connected = false, busy = false;
-  String folder = '', driveName = '', query = '', message = '从相册或文件管理器分享文件到 File Hero。';
+  String folder = '', driveName = '', query = '', message = idleMessage;
+  static const idleMessage = '从相册或文件管理器分享文件到 File Hero。';
   List<Map<String, dynamic>> entries = [];
   final Map<String, Future<Uint8List?>> thumbnails = {};
   bool checkingShares = false, sharePending = false;
@@ -53,6 +54,9 @@ class _FilesPageState extends State<FilesPage> {
       if(taken == null) {
         queuedShares.value = 0;
         if(!connected) {
+          final status = await call('ssdStatus') as Map?;
+          if(!mounted) return;
+          if(status?['state'] == 'missing') { setState(() => message = previousMessage == idleMessage ? '未检测到 SSD。请用 USB 连接 SSD 后再分享文件。' : previousMessage); return; }
           final target = await call('restoreTarget') as String?;
           if(!mounted) return;
           if(target != null) { setState(() { connected = true; driveName = target; }); await load(''); }
@@ -83,7 +87,41 @@ class _FilesPageState extends State<FilesPage> {
     }
     sharePending = true;
   }
+  // Stops the share flow while the SSD is not plugged in; returns null when the user gives up.
+  Future<Map<String,dynamic>?> ensureSsd() async {
+    while(true) {
+      final status = Map<String,dynamic>.from(await call('ssdStatus') as Map);
+      if(!mounted) return null;
+      if(status['state'] != 'missing') return status;
+      setState(() { connected = false; driveName = ''; folder = ''; entries = []; thumbnails.clear(); message = '未检测到 SSD，已暂停存入'; });
+      final choice = await showDialog<String>(context: context, barrierDismissible: false, builder: (context) => AlertDialog(
+        title: const Text('未检测到 SSD'),
+        content: const Text('没有找到已授权的 USB SSD，存入已暂停，不会把文件存到手机里。
+
+1. 用 USB 线或转接头连接 SSD
+2. 等通知栏出现 USB 存储，或文件管理器能看到 SSD
+3. 点「重试」
+
+在你放弃之前，分享的文件会一直保留。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, 'cancel'), child: const Text('放弃这批')),
+          if(status['other'] == true) TextButton(onPressed: () => Navigator.pop(context, 'other'), child: const Text('改用其他 SSD')),
+          FilledButton(onPressed: () => Navigator.pop(context, 'retry'), child: const Text('重试')),
+        ],
+      ));
+      if(!mounted || choice == null || choice == 'cancel') return null;
+      if(choice == 'other') return {...status, 'state': 'unauthorized'};
+    }
+  }
+  Future<String?> authorize(bool existing) async {
+    try { return await call('connect', {'existing': existing}) as String?; }
+    on PlatformException catch(e) {
+      if(mounted) { await showDialog<void>(context: context, builder: (context) => AlertDialog(title: const Text('无法使用所选位置'), content: Text(e.message ?? '请选择 USB SSD 上的文件夹'), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('重新选择'))])); }
+      return null;
+    }
+  }
   Future<void> saveShared(List<String> picked) async {
+    if(await ensureSsd() == null) { if(mounted) { setState(() => message = '未检测到 SSD，已停止存入，未存入任何文件'); } return; }
     final target = await call('restoreTarget') as String?;
     if(!mounted) return;
     setState(() { connected = target != null; driveName = target ?? ''; folder = ''; entries = []; thumbnails.clear(); });
@@ -101,8 +139,9 @@ class _FilesPageState extends State<FilesPage> {
       }
       name = form['name']!; description = form['description']!; mode = form['mode']!;
       existingReady = form['existingReady'] == 'true';
+      if(await ensureSsd() == null) { if(mounted) { setState(() => message = '未检测到 SSD，已停止存入，未存入任何文件'); } return; }
       if(form['action'] == 'target') {
-        final changed = await call('connect', {'existing': mode == 'existing'}) as String?;
+        final changed = await authorize(mode == 'existing');
         if(!mounted) return;
         if(changed != null) {
           existingReady = mode == 'existing';
@@ -114,7 +153,7 @@ class _FilesPageState extends State<FilesPage> {
         final rootTarget = await call('restoreTarget') as String?;
         if(!mounted) return;
         if(rootTarget == null) {
-          final authorized = await call('connect', {'existing': false}) as String?;
+          final authorized = await authorize(false);
           if(!mounted) return;
           if(authorized == null) { continue; }
           setState(() { connected = true; driveName = authorized; });
