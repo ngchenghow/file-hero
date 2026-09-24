@@ -184,9 +184,9 @@ class _FilesPageState extends State<FilesPage> {
   String pathOf(Map<String,dynamic> file) => file['path'] as String? ?? child(file['name'] as String);
   void clearSearch() { searchTimer?.cancel(); searchText.clear(); query = ''; results = []; }
   void search(String value) {
-    setState(() { query = value; if(value.trim().isEmpty) results = []; });
+    setState(() { query = value; if(value.trim().isEmpty) { results = []; } });
     searchTimer?.cancel();
-    if(value.trim().isNotEmpty) searchTimer = Timer(const Duration(milliseconds: 350), () => work(runSearch));
+    if(value.trim().isNotEmpty) { searchTimer = Timer(const Duration(milliseconds: 350), () => work(runSearch)); }
   }
   Future<void> runSearch() async {
     final text = query.trim();
@@ -211,8 +211,8 @@ class _FilesPageState extends State<FilesPage> {
     final data = await call('list', {'path': path}) as List;
     if(!mounted) return;
     final moved = path != folder;
-    setState(() { if(moved) clearSearch(); folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; });
-    if(!moved && query.trim().isNotEmpty) await runSearch();
+    setState(() { if(moved) { clearSearch(); } folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; });
+    if(!moved && query.trim().isNotEmpty) { await runSearch(); }
   }
   Future<String?> textPrompt(String title, {String initial = ''}) async {
     return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
@@ -363,7 +363,7 @@ class _ShareSaveDialogState extends State<_ShareSaveDialog> {
   @override
   void dispose() { name.dispose(); description.dispose(); super.dispose(); }
   void finish(String action) {
-    if(action == 'save' && !formKey.currentState!.validate()) return;
+    if(action == 'save' && !formKey.currentState!.validate()) { return; }
     Navigator.pop(context, {'action': action, 'name': name.text, 'description': description.text, 'mode': mode, 'existingReady': existingReady.toString()});
   }
   void selectMode(String value) { setState(() { if(mode != value) { existingReady = false; } mode = value; }); }
