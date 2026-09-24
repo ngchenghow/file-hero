@@ -99,6 +99,10 @@ function render() {
       const open = document.createElement('button'); open.textContent = '打开'; open.title = `用电脑默认程序打开 ${entry.name}`;
       open.onclick = event => { event.stopPropagation(); openFile(entry); }; actions.append(open);
     }
+    if (entry.directory) {
+      const exp = document.createElement('button'); exp.textContent = '导出'; exp.title = `导出文件夹 ${entry.name}（包括子文件夹）`;
+      exp.onclick = event => { event.stopPropagation(); exportFolder(entry); }; actions.append(exp);
+    }
     const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '删除'; remove.title = `删除 ${entry.name}`;
     remove.onclick = event => { event.stopPropagation(); removeEntry(entry); }; actions.append(remove);
     card.append(cover(entry), body, actions);
@@ -110,6 +114,7 @@ function render() {
   }
 }
 function enter(next) { task(async () => { const data = await hero.invoke('list', next); folder = next; $('search').value = ''; show(data); status('已打开文件夹'); }); }
+function exportFolder(entry) { task(async () => { const r = await hero.invoke('export', relative(entry.name), 'directory'); status(r ? `已导出文件夹「${r.name}」（${r.files} 个文件）到 ${r.path}` : '已取消导出'); }); }
 function openFile(entry) { hero.invoke('open', relative(entry.name)).then(() => status(`已用默认程序打开「${entry.name}」`), error => status(`操作未完成：${error.message}`)); }
 function details(entry) {
   selected = entry; $('details').hidden = false; $('detailName').textContent = entry.name;

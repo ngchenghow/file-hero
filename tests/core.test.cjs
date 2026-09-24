@@ -30,6 +30,17 @@ test('never overwrites an existing import or export destination', t => {
   assert.throws(()=>run(root,'export','a.txt',source),/已存在/); assert.equal(fs.readFileSync(source,'utf8'),'new');
   const exported=path.join(base,'exported.txt'); run(root,'export','a.txt',exported); assert.equal(fs.readFileSync(exported,'utf8'),'original');
 });
+test('exports a whole folder with subfolders and never overwrites or copies into itself', t => {
+  const {base,root}=fixture(t); const out=path.join(base,'out'); fs.mkdirSync(out);
+  fs.mkdirSync(path.join(root,'旅行','第一天'),{recursive:true}); fs.writeFileSync(path.join(root,'旅行','a.txt'),'a'); fs.writeFileSync(path.join(root,'旅行','第一天','b.txt'),'b');
+  run(root,'index'); fs.mkdirSync(path.join(out,'旅行')); fs.writeFileSync(path.join(out,'旅行','keep.txt'),'keep');
+  const r=run(root,'export','旅行',out); assert.equal(r.name,'旅行 (2)'); assert.equal(r.files,4);
+  assert.equal(fs.readFileSync(path.join(out,'旅行 (2)','第一天','b.txt'),'utf8'),'b'); assert.ok(fs.existsSync(path.join(out,'旅行 (2)','file-readme.txt')));
+  assert.deepEqual(fs.readdirSync(path.join(out,'旅行')),['keep.txt']);
+  const inside=run(root,'export','旅行',path.join(root,'旅行','第一天')); assert.equal(inside.files,4);
+  assert.deepEqual(fs.readdirSync(path.join(root,'旅行','第一天','旅行')).sort(),['a.txt','file-readme.txt','第一天']);
+  assert.throws(()=>run(root,'export','',out));
+});
 test('rejects traversal, reserved names, metadata access, and injected descriptions', t => {
   const {root}=fixture(t); fs.writeFileSync(path.join(root,'file.txt'),'x');
   for(const p of ['../','a/../../','.file-hero','.. /','C:\\Windows']) assert.throws(()=>run(root,'list',p));

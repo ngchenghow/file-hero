@@ -217,6 +217,10 @@ else {
           const result = await core(args, progress);
           shares = []; return result;
         }
+        if (action === 'export' && value === 'directory') {
+          const result = await dialog.showOpenDialog(window, { title: `导出文件夹「${path.basename(relative)}」到…（会在所选位置新建同名文件夹）`, properties: ['openDirectory', 'createDirectory'] });
+          return result.canceled ? null : await inRoot('export', relative, result.filePaths[0]);
+        }
         if (action === 'export') {
           const result = await dialog.showSaveDialog(window, { title: '导出副本（请选择新文件名）', defaultPath: path.basename(relative) });
           return result.canceled ? null : await inRoot('export', relative, result.filePath);

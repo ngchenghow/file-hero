@@ -376,6 +376,25 @@ int run(const std::vector<std::string>& a) {
       try {fs::copy_file(src,dest,fs::copy_options::none);} catch(...) {if(fs::exists(dest)) fs::remove(dest); throw;}
       try {writeMeta(dest,nullptr,true);} catch(...) {fs::remove(dest); throw;}
       std::cout << "{}";
+    } else if(cmd=="export" && fs::is_directory(p)) {
+      // export <root> <folder> <destination-parent>: copies the folder (subfolders included) into a new folder there.
+      require(a.size()==5 && p!=root,"缺少来源或目标"); auto parent=fs::u8path(a[4]);
+      require(fs::is_directory(parent),"找不到导出位置");
+      // List everything first, so a destination inside the source folder is never copied into itself.
+      std::vector<fs::path> dirs, files;
+      for(auto it=fs::recursive_directory_iterator(p); it!=fs::recursive_directory_iterator(); ++it) {
+        auto name=it->path().filename();
+        if(it->is_symlink() || name==".file-hero" || isScratch(it->path())) { if(it->is_directory()) it.disable_recursion_pending(); continue; }
+        if(it->is_directory()) dirs.push_back(fs::relative(it->path(),p)); else if(it->is_regular_file()) files.push_back(fs::relative(it->path(),p));
+      }
+      auto base=utf(p.filename()); auto dest=parent/p.filename();
+      for(int n=2; fs::exists(fs::symlink_status(dest)); ++n) dest=parent/fs::u8path(base+" ("+std::to_string(n)+")");
+      fs::create_directory(dest);
+      try {
+        for(const auto& d:dirs) fs::create_directory(dest/d);
+        for(const auto& f:files) fs::copy_file(p/f,dest/f,fs::copy_options::none);
+      } catch(...) {std::error_code ec; fs::remove_all(dest,ec); throw;}
+      std::cout << "{\"name\":" << quote(utf(dest.filename())) << ",\"files\":" << files.size() << ",\"path\":" << quote(utf(dest)) << "}";
     } else if(cmd=="export") {
       require(a.size()==5 && fs::is_regular_file(p),"缺少来源或目标"); auto dest=fs::u8path(a[4]);
       require(!fs::exists(dest) && !fs::is_symlink(fs::symlink_status(dest)),"导出目标已存在，不会覆盖");
