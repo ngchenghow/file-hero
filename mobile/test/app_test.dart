@@ -339,7 +339,15 @@ void main() {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
     await tester.tap(find.byTooltip('生成视频截图')); await advance(tester);
     expect(calls.singleWhere((c) => c.method == 'makeThumbs').arguments['path'], '');
-    expect(find.text('已为 2 个视频生成截图。1 个视频无法截图（格式不支持或文件损坏）。'), findsOneWidget);
+    // Shown in the status line and in a snack bar, so the result is not missed.
+    expect(find.text('已为 2 个视频生成截图。1 个视频无法截图（格式不支持或文件损坏）。'), findsNWidgets(2));
+  });
+  testWidgets('screenshot progress from the phone storage shows each video', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage('com.filehero/storage',
+      const StandardMethodCodec().encodeMethodCall(const MethodCall('thumbsProgress', {'index': 3, 'total': 12, 'name': '京都.mp4'})), (_) {});
+    await tester.pump();
+    expect(find.text('正在生成视频截图 3 / 12：京都.mp4（请勿拔出 SSD）'), findsOneWidget);
   });
   testWidgets('sending stops when SSD is missing', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);

@@ -35,6 +35,10 @@ class _FilesPageState extends State<FilesPage> {
   void initState() {
     super.initState();
     channel.setMethodCallHandler((event) async {
+      if(event.method == 'thumbsProgress' && mounted) {
+        final args = Map<String,dynamic>.from(event.arguments as Map);
+        setState(() => message = '正在生成视频截图 ${args['index']} / ${args['total']}：${args['name']}（请勿拔出 SSD）');
+      }
       if(event.method == 'shareAvailable') {
         queuedShares.value = event.arguments as int? ?? queuedShares.value + 1;
         if(busy && mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('收到新的分享，完成当前操作后会继续'))); }
@@ -186,7 +190,10 @@ class _FilesPageState extends State<FilesPage> {
       final result = Map<String,dynamic>.from(await call('makeThumbs') as Map);
       await load();
       final note = shotsNote(result['made'], result['failed']);
-      if(mounted) { setState(() => message = note.isEmpty ? '所有视频都已有截图' : note); }
+      if(!mounted) { return; }
+      final text = note.isEmpty ? '这里的视频都已有截图' : note;
+      setState(() => message = text);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
     });
   }
   String child(String name) => folder.isEmpty ? name : '$folder/$name';

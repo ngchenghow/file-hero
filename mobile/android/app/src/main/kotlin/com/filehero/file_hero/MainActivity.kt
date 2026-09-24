@@ -117,21 +117,40 @@ class MainActivity : FlutterActivity() {
     // The same screenshots the desktop app makes: three 250x250 JPEGs at 25%, 50% and 75% of the video, the whole
     // frame scaled to fit on black, in the folder's thumbs folder and listed under Thumbnails in file-readme.txt.
     // Only videos without all three are done. counts = [made, failed].
-    private fun makeThumbs(dir: DocumentFile, only: Set<String>? = null, recursive: Boolean = false, counts: IntArray = intArrayOf(0, 0)): IntArray {
+    // Videos of one folder that still need screenshots, found before any are made so progress can show "3 / 12".
+    private class PendingShots(val dir: DocumentFile, val videos: List<DocumentFile>)
+    private fun pendingShots(dir: DocumentFile, only: Set<String>?, recursive: Boolean, out: MutableList<PendingShots>) {
         val files = dir.listFiles()
         val batch = try { readBatch(dir) } catch(_: Exception) { null }
         if(batch != null && files.none { it.name == "file-readme.txt.tmp" || it.name == "file-readme.txt.backup" }) {
-            var thumbs = files.firstOrNull { isThumbs(it) }
-            var changed = false
-            for(video in files) {
-                val name = video.name ?: continue
-                if(!video.isFile || !isVideo(name) || (only != null && name !in only)) continue
+            val existing = files.firstOrNull { isThumbs(it) }?.listFiles()?.mapNotNull { it.name }?.toSet() ?: emptySet()
+            val videos = files.filter { video ->
+                val name = video.name ?: return@filter false
                 val listed = thumbList(batch.files[name])
-                val folder = thumbs
-                if(listed.size == 3 && folder != null && listed.all { it.startsWith("thumbs/") && folder.findFile(it.removePrefix("thumbs/"))?.isFile == true }) continue
+                video.isFile && isVideo(name) && (only == null || name in only) &&
+                    !(listed.size == 3 && listed.all { it.startsWith("thumbs/") && it.removePrefix("thumbs/") in existing })
+            }.sortedBy { it.name }
+            if(videos.isNotEmpty()) out.add(PendingShots(dir, videos))
+        }
+        if(recursive) for(sub in files) if(sub.isDirectory && !isThumbs(sub) && sub.name != ".file-hero") pendingShots(sub, null, true, out)
+    }
+    // Returns [made, failed]; reports "thumbsProgress" to the app before each video.
+    private fun makeThumbs(dir: DocumentFile, only: Set<String>? = null, recursive: Boolean = false): IntArray {
+        val pending = mutableListOf<PendingShots>(); pendingShots(dir, only, recursive, pending)
+        val total = pending.sumOf { it.videos.size }; var index = 0
+        val counts = intArrayOf(0, 0)
+        for(folder in pending) {
+            val batch = try { readBatch(folder.dir) } catch(_: Exception) { counts[1] += folder.videos.size; index += folder.videos.size; continue }
+            var thumbs = folder.dir.listFiles().firstOrNull { isThumbs(it) }
+            var changed = false
+            for(video in folder.videos) {
+                val name = video.name ?: continue
+                index++
+                val step = index
+                runOnUiThread { storageChannel?.invokeMethod("thumbsProgress", mapOf("index" to step, "total" to total, "name" to name)) }
                 val shots = try { videoShots(video.uri) } catch(_: Exception) { null }
                 if(shots == null) { counts[1]++; continue }
-                val target = thumbs ?: dir.createDirectory("thumbs") ?: error("无法建立 thumbs 文件夹")
+                val target = thumbs ?: folder.dir.createDirectory("thumbs") ?: error("无法建立 thumbs 文件夹")
                 thumbs = target
                 val names = shots.mapIndexed { i, jpeg ->
                     val shotName = "$name-${i + 1}.jpg"
@@ -142,9 +161,8 @@ class MainActivity : FlutterActivity() {
                 record(video, batch.files.getOrPut(name) { mutableMapOf() })["Thumbnails"] = names.joinToString(" | ")
                 changed = true; counts[0]++
             }
-            if(changed) { try { writeBatch(dir, batch) } catch(_: ManifestCommittedException) {} }
+            if(changed) { try { writeBatch(folder.dir, batch) } catch(_: ManifestCommittedException) {} }
         }
-        if(recursive) for(sub in files) if(sub.isDirectory && !isThumbs(sub) && sub.name != ".file-hero") makeThumbs(sub, null, true, counts)
         return counts
     }
     private fun videoShots(uri: Uri): List<ByteArray>? {
