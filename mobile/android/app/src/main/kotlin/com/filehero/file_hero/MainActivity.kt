@@ -1,6 +1,7 @@
 package com.filehero.file_hero
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
@@ -15,6 +16,7 @@ import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.util.Size
+import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -252,6 +254,23 @@ class MainActivity : FlutterActivity() {
                     runOnUiThread {
                         try { startActivity(intent); active = false; result.success(mapOf("via" to used, "files" to count)) }
                         catch(e: Exception) { active = false; result.error("STORAGE", e.message ?: "无法打开发送界面", null) }
+                    }
+                } catch(e: Exception) { runOnUiThread { active = false; result.error("STORAGE", e.message, null) } }
+            }
+            return
+        }
+        if(call.method == "open") {
+            // Opens the SSD file in whichever phone app handles its type (files stored from the PC included).
+            worker.execute {
+                try {
+                    val file = resolve(path); require(file.isFile) { "只能打开文件" }
+                    val extension = file.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) ?: ""
+                    val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: file.type ?: "*/*"
+                    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    runOnUiThread {
+                        try { startActivity(intent); active = false; result.success(true) }
+                        catch(_: ActivityNotFoundException) { active = false; result.error("STORAGE", "手机上没有可以打开这种文件的应用（$type），可以先导出或发送到其他设备", null) }
+                        catch(e: Exception) { active = false; result.error("STORAGE", e.message ?: "无法打开文件", null) }
                     }
                 } catch(e: Exception) { runOnUiThread { active = false; result.error("STORAGE", e.message, null) } }
             }

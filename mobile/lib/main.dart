@@ -219,13 +219,16 @@ class _FilesPageState extends State<FilesPage> {
     final action = await showModalBottomSheet<String>(context: context, isScrollControlled: true, builder: (context) => SafeArea(child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Icon(Icons.insert_drive_file_outlined, size: 36), const SizedBox(height: 12), Text(file['name'] as String, style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 20),
       Text('容量：${size((file['size'] as num).toInt())}\n修改日期：${file['modified']}\n首次建档：${meta['First-Indexed-UTC'] ?? '尚未建档'}\n上一次存入：${meta['Last-Stored-UTC'] == 'unknown' ? '未知' : meta['Last-Stored-UTC'] ?? '未知'}'), const SizedBox(height: 20), Text((meta['Description'] as String?)?.isNotEmpty == true ? meta['Description'] as String : '尚未填写文件描述'), const SizedBox(height: 20),
-      FilledButton.icon(onPressed: () => Navigator.pop(context, 'describe'), icon: const Icon(Icons.edit_outlined), label: const Text('编辑说明')),
+      FilledButton.icon(onPressed: () => Navigator.pop(context, 'open'), icon: const Icon(Icons.open_in_new), label: const Text('打开')),
+      OutlinedButton.icon(onPressed: () => Navigator.pop(context, 'describe'), icon: const Icon(Icons.edit_outlined), label: const Text('编辑说明')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'export'), icon: const Icon(Icons.download_outlined), label: const Text('导出文件副本')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'send'), icon: const Icon(Icons.bluetooth), label: const Text('蓝牙导出到其他设备')),
       const Text('本批所有文件的描述统一保存在当前文件夹的 file-readme.txt。', style: TextStyle(fontSize: 11, color: Colors.grey)),
     ])))));
     if(!mounted || action == null) return;
-    if(action == 'send') {
+    if(action == 'open') {
+      await work(() async { await call('open', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = '已打开「${file['name']}」'); } });
+    } else if(action == 'send') {
       await sendMenu(file);
     } else if(action == 'describe') {
       final description = await textPrompt('文件描述', initial: meta['Description'] as String? ?? '');

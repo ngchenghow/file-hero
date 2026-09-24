@@ -35,6 +35,7 @@ void main() {
           deleted = true; return {'deleted': true, 'warning': ''};
         case 'list': if(deleted) return <Object>[]; return [{'name': fileMode ? 'photo.jpg' : '旅行批次', 'directory': !fileMode, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
         case 'thumbnail': return null;
+        case 'open': return true;
         case 'send': return {'via': call.arguments['via'], 'files': call.arguments['directory'] == true ? 3 : 1};
         default: throw PlatformException(code: 'UNEXPECTED', message: call.method);
       }
@@ -248,6 +249,14 @@ void main() {
     await tester.tap(find.text('其他方式发送')); await advance(tester);
     final data = calls.singleWhere((c) => c.method == 'send').arguments;
     expect(data['path'], 'photo.jpg'); expect(data['directory'], false); expect(data['via'], 'chooser');
+  });
+  testWidgets('file detail opens the SSD file in a phone app', (tester) async {
+    target = 'SSD'; fileMode = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('photo.jpg')); await advance(tester);
+    await tester.tap(find.text('打开')); await advance(tester);
+    expect(calls.singleWhere((c) => c.method == 'open').arguments['path'], 'photo.jpg');
+    expect(find.text('已打开「photo.jpg」'), findsOneWidget);
   });
   testWidgets('sending stops when SSD is missing', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
