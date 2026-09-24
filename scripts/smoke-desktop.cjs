@@ -48,6 +48,8 @@ app.whenReady().then(async () => {
     await js("document.getElementById('pickFolder').click()");
     await until("!document.getElementById('shareSave').disabled", 'SSD connected while staged');
     assert.ok(fs.statSync(hero).isDirectory());
+    // Connecting puts the AI guide in the file-hero folder (hidden from the list below).
+    assert.match(fs.readFileSync(path.join(hero, '给AI的说明.md'), 'utf8'), /Description:/);
     await js("document.getElementById('shareName').value='东京旅行'; document.getElementById('shareDescription').value='行程和票据'");
     await copied('new folder saved');
     assert.match(fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8'), /Description: 行程和票据/);
@@ -67,6 +69,7 @@ app.whenReady().then(async () => {
 
     // Remove one staged item, then copy a dropped folder into an existing folder from the root.
     await js("document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero'", 'up');
+    assert.equal(await js("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent.includes('说明.md'))"), false);
     assert.match(await js("document.querySelector('#files .card').textContent"), /行程和票据/);
     await stage([album, extra]);
     await until(`${tray}.includes('extra.txt') && ${tray}.includes('相册')`, 'two staged');

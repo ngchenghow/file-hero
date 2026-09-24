@@ -162,6 +162,15 @@ test('videos without all three screenshots are listed; screenshots are recorded,
   const album=path.join(base,'相册'); fs.mkdirSync(path.join(album,'thumbs'),{recursive:true}); fs.writeFileSync(path.join(album,'thumbs','x.jpg'),'j'); fs.writeFileSync(path.join(album,'c.mp4'),'v');
   run(root,'batch','',['相册','',album]); assert.equal(fs.existsSync(path.join(root,'相册','thumbs')),false);
 });
+test('the AI guide in the file-hero folder is not listed, searched or indexed', t => {
+  const {base,root}=fixture(t); const a=path.join(base,'a.txt'); fs.writeFileSync(a,'a');
+  fs.writeFileSync(path.join(root,'给AI的说明.md'),'# 说明'); run(root,'batch','',['旅行','',a]);
+  assert.deepEqual(run(root,'list').entries.map(e=>e.name),['旅行']);
+  assert.deepEqual(run(root,'search','','说明').entries,[]);
+  run(root,'index'); assert.equal(fs.existsSync(path.join(root,'file-readme.txt')),false); // nothing to record at the top
+  // Only the one in the file-hero folder itself is File Hero's; a user's file of that name elsewhere is shown.
+  fs.writeFileSync(path.join(root,'旅行','给AI的说明.md'),'mine'); assert.ok(run(root,'list','旅行').entries.some(e=>e.name==='给AI的说明.md'));
+});
 test('delete removes files from the manifest, removes folders, and never removes the root', t => {
   const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'abc'); fs.writeFileSync(b,'12345');
   run(root,'batch','',['批次','desc',a,b]);

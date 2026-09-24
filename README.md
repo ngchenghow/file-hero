@@ -74,9 +74,9 @@ Thumbnails: thumbs/京都.mp4-1.jpg | thumbs/京都.mp4-2.jpg | thumbs/京都.mp
 - 支持 MP4、MOV、M4V、WebM 等常见格式（H.264、HEVC、VP9）；无法解码的视频（如旧 AVI）会跳过并在状态栏提示。
 - `thumbs` 是 File Hero 专用文件夹：电脑和手机都不显示、不搜索，也不会在里面建立说明文件。重命名或删除视频时截图跟着改名或删除。
 
-**让 Claude 写描述**：在 Claude 的工作模式中选择 SSD 上的批次文件夹（或整个 `file-hero` 文件夹），然后说：
+**让 Claude 写描述**：电脑版连接 SSD 时会在 `file-hero` 文件夹放一份 `给AI的说明.md`（App 中不显示；已存在时不会覆盖，删掉后下次连接会重新放入最新版），写明 file-readme.txt 的格式、只能改哪一行和描述的写法（中文一两句）。在 Claude 的工作模式中选择 SSD 上的 `file-hero` 文件夹，然后说：
 
-> 查看每个文件夹 file-readme.txt 里 Thumbnails 列出的视频截图，给 Description 为空的视频写一句中文描述，写进该视频记录的 Description 行（一行，不换行）。不要改动其他行，也不要改已有的描述。
+> 请按照 file-hero 文件夹里的《给AI的说明.md》为视频写描述。
 
 File Hero 下次打开或刷新文件夹时就会显示这些描述，手机上同样可见。
 

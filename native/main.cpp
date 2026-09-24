@@ -84,6 +84,8 @@ bool isScratch(const fs::path& file) { auto n=lower(utf(file.filename())); retur
 // Every folder with videos keeps a "thumbs" folder of screenshots (3 per video, listed under Thumbnails in
 // file-readme.txt). It is File Hero's own folder: hidden from listings, search and indexing.
 bool isThumbs(const fs::path& p) { std::error_code ec; return lower(utf(p.filename()))=="thumbs" && fs::is_directory(p,ec); }
+// file-hero/给AI的说明.md tells an AI how to describe videos; File Hero writes it and keeps it out of the listings.
+bool isGuide(const fs::path& root, const fs::path& p) { return p.parent_path()==root && utf(p.filename())=="给AI的说明.md"; }
 bool isVideo(const fs::path& p) {
   static const std::set<std::string> ext{".mp4",".mov",".m4v",".3gp",".mkv",".webm",".avi"};
   return ext.count(lower(utf(p.extension())))>0;
@@ -166,11 +168,11 @@ std::string cover(const fs::path& dir) {
   for(const auto& e:fs::directory_iterator(dir,ec)) if(e.is_regular_file(ec) && !e.is_symlink(ec) && previewable(e.path())) { auto n=utf(e.path().filename()); if(best.empty() || n<best) best=n; }
   return best;
 }
-void indexTree(const fs::path& p, int& count) {
+void indexTree(const fs::path& p, int& count, const fs::path& root) {
   auto batch=readBatch(p); auto previous=batch.files; batch.files.clear();
   for(const auto& e:fs::directory_iterator(p)) {
-    if(e.path().filename()==".file-hero" || e.is_symlink() || isThumbs(e.path())) continue;
-    if(e.is_directory()) indexTree(e.path(),count);
+    if(e.path().filename()==".file-hero" || e.is_symlink() || isThumbs(e.path()) || isGuide(root,e.path())) continue;
+    if(e.is_directory()) indexTree(e.path(),count,root);
     else if(e.is_regular_file() && !isReadme(e.path()) && !isScratch(e.path())) {auto name=utf(e.path().filename()); batch.files[name]=record(e.path(),previous[name]); ++count;}
   }
   if(!batch.files.empty() || !batch.header.empty()) writeBatch(p,batch);
@@ -321,7 +323,7 @@ std::wstring folded(const std::string& s) {
 Batch batchOrEmpty(const fs::path& dir) { try { return readBatch(dir,false); } catch(...) { return {}; } }
 void searchTree(const fs::path& root, const fs::path& dir, Batch& batch, const std::wstring& query, std::string& out, size_t& found, bool& truncated) {
   std::vector<fs::directory_entry> entries; std::error_code ec;
-  for(const auto& e:fs::directory_iterator(dir,ec)) if(e.path().filename()!=".file-hero" && !e.is_symlink(ec) && !isThumbs(e.path()) && (e.is_directory(ec) || e.is_regular_file(ec))) entries.push_back(e);
+  for(const auto& e:fs::directory_iterator(dir,ec)) if(e.path().filename()!=".file-hero" && !e.is_symlink(ec) && !isThumbs(e.path()) && !isGuide(root,e.path()) && (e.is_directory(ec) || e.is_regular_file(ec))) entries.push_back(e);
   std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){if(x.is_directory()!=y.is_directory()) return x.is_directory(); return x.path()<y.path();});
   for(const auto& e:entries) {
     if(truncated) return;
@@ -355,7 +357,7 @@ int run(const std::vector<std::string>& a) {
     auto p=resolve(root,a[3]); auto cmd=a[1];
     if(cmd=="list") {
       require(fs::is_directory(p),"找不到文件夹"); std::vector<fs::directory_entry> entries;
-      for(const auto& e:fs::directory_iterator(p)) if(e.path().filename()!=".file-hero" && !e.is_symlink() && !isThumbs(e.path())) entries.push_back(e);
+      for(const auto& e:fs::directory_iterator(p)) if(e.path().filename()!=".file-hero" && !e.is_symlink() && !isThumbs(e.path()) && !isGuide(root,e.path())) entries.push_back(e);
       std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){if(x.is_directory()!=y.is_directory()) return x.is_directory(); return x.path()<y.path();});
       auto s=fs::space(root); std::string out="{\"capacity\":"+std::to_string(s.capacity)+",\"available\":"+std::to_string(s.available)+",\"entries\":["; bool first=true;
       for(const auto& e:entries) {
@@ -369,7 +371,7 @@ int run(const std::vector<std::string>& a) {
       std::string out; size_t found=0; bool truncated=false; auto batch=batchOrEmpty(p); searchTree(root,p,batch,query,out,found,truncated);
       std::cout << "{\"truncated\":" << (truncated?"true":"false") << ",\"entries\":[" << out << "]}";
     } else if(cmd=="index") {
-      require(fs::is_directory(p),"找不到文件夹"); int n=0; indexTree(p,n); std::cout << "{\"indexed\":" << n << "}";
+      require(fs::is_directory(p),"找不到文件夹"); int n=0; indexTree(p,n,root); std::cout << "{\"indexed\":" << n << "}";
     } else if(cmd=="mkdir") {
       require(a.size()==5,"缺少文件夹名称"); nameCheck(a[4]); require(fs::is_directory(p),"找不到文件夹");
       require(lower(a[4])!="thumbs","thumbs 是视频截图文件夹的保留名称");

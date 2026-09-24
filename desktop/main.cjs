@@ -79,10 +79,13 @@ async function connect(target) {
   const result = path.basename(chosen).toLowerCase() === 'file-hero' ? { root: chosen } : await core(['setup', chosen]);
   const list = await drives().catch(() => []);
   root = result.root; paused = false; wanted = null;
+  // Instructions for an AI that writes video descriptions from the screenshots; the user's own edits are kept.
+  try { fs.copyFileSync(path.join(__dirname, 'ai-guide.md'), path.join(root, GUIDE), fs.constants.COPYFILE_EXCL); } catch {}
   device = list.find(d => root.toUpperCase().startsWith(d.drive.toUpperCase())) || { drive: path.parse(root).root, label: '', filesystem: '' };
   if (list.includes(device)) { settings.lastDrive = device.drive; saveSettings(); }
   return connection();
 }
+const GUIDE = '给AI的说明.md';
 const connection = () => ({ root, device });
 // Keeps the connection in step with the hardware: drops a removed SSD, connects an inserted one.
 async function poll() {
