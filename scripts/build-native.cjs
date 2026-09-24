@@ -7,7 +7,7 @@ const win = process.platform === 'win32';
 const compiler = process.env.CXX || (win && fs.existsSync('C:/msys64/mingw64/bin/g++.exe') ? 'C:/msys64/mingw64/bin/g++.exe' : 'g++');
 const targets = [['native/main.cpp', 'file-hero-core', []]];
 // The SSD watcher / Explorer integration agent only exists on Windows.
-if (win) targets.push(['native/agent.cpp', 'file-hero-agent', ['-mwindows', '-lshell32']]);
+if (win) targets.push(['native/agent.cpp', 'file-hero-agent', ['-mwindows', '-lshell32', '-lole32', '-luuid']]);
 for (const [source, name, extra] of targets) {
   const result = spawnSync(compiler, ['-std=c++17', '-O2', '-Wall', '-Wextra', ...(win ? ['-municode', '-static'] : []), source, '-o', `build/${name}${win ? '.exe' : ''}`, ...extra], { stdio: 'inherit' });
   if (result.error) console.error('Install a C++17 compiler or set CXX:', result.error.message);

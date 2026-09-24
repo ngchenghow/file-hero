@@ -1,5 +1,6 @@
 // File Hero agent (Windows): a tiny background process started at sign-in.
-// It opens File Hero when an SSD that has a file-hero folder is plugged in, and it
+// It opens File Hero when an SSD that has a file-hero folder is plugged in (instead of the Explorer
+// window AutoPlay would open), and it
 // owns the per-user registry entries (autostart and the Explorer "Share to SSD" menu).
 //   file-hero-agent.exe --app <File Hero.exe>          watch for SSD arrival
 //   file-hero-agent.exe register <0|1> <0|1> <app.exe> set autostart / context menu
@@ -10,6 +11,7 @@
 #include <dbt.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <string>
 #include <vector>
 namespace {
@@ -125,6 +127,36 @@ int share(const std::wstring& app, const std::wstring& file) {
   CloseHandle(lock);
   return 0;
 }
+bool isHeroDrive(const std::wstring& root) {
+  std::wstring hero = root + (root.empty() || root.back() == L'\\' ? L"" : L"\\") + L"file-hero";
+  DWORD attributes = GetFileAttributesW(hero.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+// Windows asks every IQueryCancelAutoPlay in the Running Object Table before running AutoPlay
+// (for example "Open folder to view files"). File Hero opens for these drives, so skip the Explorer window.
+struct CancelAutoPlay : IQueryCancelAutoPlay {
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
+    if(id == IID_IUnknown || id == IID_IQueryCancelAutoPlay) { *out = static_cast<IQueryCancelAutoPlay*>(this); return S_OK; }
+    *out = nullptr; return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+  HRESULT STDMETHODCALLTYPE AllowAutoPlay(LPCWSTR path, DWORD, LPCWSTR, DWORD) override {
+    return path && !appExe.empty() && isHeroDrive(path) ? S_FALSE : S_OK;
+  }
+} cancelAutoPlay;
+DWORD registerCancelAutoPlay() {
+  IRunningObjectTable* table = nullptr; IMoniker* moniker = nullptr; DWORD cookie = 0;
+  if(SUCCEEDED(GetRunningObjectTable(0, &table)) && SUCCEEDED(CreateClassMoniker(CLSID_QueryCancelAutoPlay, &moniker)))
+    table->Register(ROTFLAGS_REGISTRATIONKEEPSALIVE, &cancelAutoPlay, moniker, &cookie);
+  if(moniker) moniker->Release();
+  if(table) table->Release();
+  return cookie;
+}
+void revokeCancelAutoPlay(DWORD cookie) {
+  IRunningObjectTable* table = nullptr;
+  if(cookie && SUCCEEDED(GetRunningObjectTable(0, &table))) { table->Revoke(cookie); table->Release(); }
+}
 void stopAgents() {
   for(int i = 0; i < 20; ++i) {
     HWND window = FindWindowW(kClass, nullptr);
@@ -139,9 +171,7 @@ void checkPending(HWND window) {
     if(!(pending & (1u << i))) continue;
     wchar_t root[] = {wchar_t(L'A' + i), L':', L'\\', 0};
     if(GetFileAttributesW(root) == INVALID_FILE_ATTRIBUTES) { waiting |= 1u << i; continue; }
-    std::wstring hero = std::wstring(root) + L"file-hero";
-    DWORD attributes = GetFileAttributesW(hero.c_str());
-    if(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    if(isHeroDrive(root)) {
       std::wstring args = L"--ssd=" + std::wstring(1, wchar_t(L'A' + i));
       ShellExecuteW(nullptr, L"open", appExe.c_str(), args.c_str(), nullptr, SW_SHOWNORMAL);
     }
@@ -172,8 +202,13 @@ int watch(HINSTANCE instance) {
   RegisterClassW(&type);
   // A hidden top-level window (not message-only) so it receives the volume arrival broadcast.
   if(!CreateWindowExW(0, kClass, L"File Hero Agent", WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr)) return 1;
+  // The message loop below also serves the AutoPlay calls from Explorer.
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  DWORD cookie = registerCancelAutoPlay();
   MSG message;
   while(GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+  revokeCancelAutoPlay(cookie);
+  CoUninitialize();
   ReleaseMutex(mutex);
   return 0;
 }
