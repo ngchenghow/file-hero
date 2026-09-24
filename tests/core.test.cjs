@@ -130,6 +130,38 @@ test('rename moves the description with the file and never overwrites', t => {
   assert.match(manifest,/Batch: 京都之旅/); assert.equal(run(root,'list').entries[0].metadata.Description,'京都');
   assert.throws(()=>run(root,'rename','','x'));
 });
+test('videos without all three screenshots are listed; screenshots are recorded, hidden, renamed and deleted with their video', t => {
+  const {base,root}=fixture(t); const v=path.join(base,'trip.mp4'), w=path.join(base,'b.MOV'), doc=path.join(base,'notes.txt');
+  fs.writeFileSync(v,'video'); fs.writeFileSync(w,'video2'); fs.writeFileSync(doc,'n');
+  run(root,'batch','',['旅行','京都',v,w,doc]); run(root,'batch','旅行',['第二天','',v]);
+  assert.deepEqual(run(root,'videos','').map(x=>x.path).sort(),['旅行/b.MOV','旅行/trip.mp4','旅行/第二天/trip.mp4']);
+  const dir=path.join(root,'旅行'), thumbs=path.join(dir,'thumbs'); fs.mkdirSync(thumbs);
+  const shots=[1,2,3].map(n=>`thumbs/trip.mp4-${n}.jpg`); for(const s of shots) fs.writeFileSync(path.join(dir,s),'jpg');
+  run(root,'describe','旅行/trip.mp4','京都的街道');
+  assert.equal(run(root,'thumbs','旅行/trip.mp4',shots.join(' | ')).Thumbnails,shots.join(' | '));
+  assert.deepEqual(run(root,'videos','旅行').map(x=>x.path).sort(),['旅行/b.MOV','旅行/第二天/trip.mp4']);
+  let manifest=fs.readFileSync(path.join(dir,'file-readme.txt'),'utf8');
+  assert.match(manifest,/\[File: trip\.mp4\][^[]*Description: 京都的街道[^[]*Thumbnails: thumbs\/trip\.mp4-1\.jpg \| thumbs\/trip\.mp4-2\.jpg \| thumbs\/trip\.mp4-3\.jpg/);
+  // A missing screenshot puts the video back on the list.
+  fs.rmSync(path.join(dir,shots[1])); assert.ok(run(root,'videos','旅行').some(x=>x.path==='旅行/trip.mp4')); fs.writeFileSync(path.join(dir,shots[1]),'jpg');
+  // The thumbs folder never shows up, is not searched and gets no readme of its own.
+  assert.equal(run(root,'list','旅行').entries.some(e=>e.name==='thumbs'),false);
+  assert.deepEqual(run(root,'search','','.jpg').entries,[]);
+  run(root,'index','旅行'); assert.equal(fs.existsSync(path.join(thumbs,'file-readme.txt')),false);
+  assert.equal(run(root,'list','旅行').entries.find(e=>e.name==='trip.mp4').metadata.Thumbnails,shots.join(' | '));
+  assert.throws(()=>run(root,'thumbs','旅行/notes.txt','')); assert.throws(()=>run(root,'thumbs','旅行/trip.mp4','../x.jpg'));
+  assert.throws(()=>run(root,'mkdir','旅行','thumbs'),/保留/); assert.throws(()=>run(root,'rename','旅行/第二天','Thumbs'),/保留/);
+  // Renaming the video renames its screenshots; its description stays.
+  run(root,'rename','旅行/trip.mp4','京都.mp4');
+  for(const n of [1,2,3]) { assert.ok(fs.existsSync(path.join(thumbs,`京都.mp4-${n}.jpg`))); assert.equal(fs.existsSync(path.join(thumbs,`trip.mp4-${n}.jpg`)),false); }
+  const moved=run(root,'list','旅行').entries.find(e=>e.name==='京都.mp4').metadata;
+  assert.equal(moved.Thumbnails,[1,2,3].map(n=>`thumbs/京都.mp4-${n}.jpg`).join(' | ')); assert.equal(moved.Description,'京都的街道');
+  // Deleting the last video with screenshots removes them and the empty thumbs folder.
+  run(root,'delete','旅行/京都.mp4'); assert.equal(fs.existsSync(thumbs),false);
+  // A folder copied in from the computer does not bring an old thumbs folder along.
+  const album=path.join(base,'相册'); fs.mkdirSync(path.join(album,'thumbs'),{recursive:true}); fs.writeFileSync(path.join(album,'thumbs','x.jpg'),'j'); fs.writeFileSync(path.join(album,'c.mp4'),'v');
+  run(root,'batch','',['相册','',album]); assert.equal(fs.existsSync(path.join(root,'相册','thumbs')),false);
+});
 test('delete removes files from the manifest, removes folders, and never removes the root', t => {
   const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'abc'); fs.writeFileSync(b,'12345');
   run(root,'batch','',['批次','desc',a,b]);

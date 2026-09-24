@@ -13,6 +13,9 @@ const later = path.join(base, 'notes.txt'); fs.writeFileSync(later, 'Imported no
 const album = path.join(base, '相册'); fs.mkdirSync(path.join(album, '第一天'), { recursive: true });
 fs.writeFileSync(path.join(album, 'a.txt'), 'a'); fs.writeFileSync(path.join(album, '第一天', 'b.txt'), 'bb');
 const extra = path.join(base, 'extra.txt'); fs.writeFileSync(extra, 'extra');
+// A short H.264 clip for the video screenshot step (skipped when ffmpeg is not installed).
+const clip = path.join(base, '街景.mp4');
+const hasClip = require('node:child_process').spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=duration=3:size=320x180:rate=25', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]).status === 0;
 process.env.FILE_HERO_DRIVES = 'off';
 app.setPath('userData', path.join(base, 'electron-profile'));
 dialog.showOpenDialog = async (_window, options) => ({ canceled: false, filePaths: [options.properties.includes('openDirectory') ? ssd : extra] });
@@ -161,11 +164,28 @@ app.whenReady().then(async () => {
     manifest = fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8');
     assert.match(manifest, /File-Count: 1/);
 
+    // Storing a video makes three 250x250 screenshots in the folder's thumbs folder, listed in file-readme.txt.
+    if (hasClip) {
+      await stage([clip]);
+      await until("!document.getElementById('trayFull').hidden", 'video staged');
+      await copied('video saved');
+      await until("document.getElementById('status').textContent.includes('已为 1 个视频生成截图')", 'screenshots reported');
+      const shots = [1, 2, 3].map(n => path.join(hero, '东京旅行', 'thumbs', `街景.mp4-${n}.jpg`));
+      for (const shot of shots) { const jpg = fs.readFileSync(shot); assert.equal(jpg.readUInt16BE(0), 0xffd8); assert.ok(jpg.length > 1000); }
+      assert.match(fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8'), /\[File: 街景\.mp4\][^[]*Thumbnails: thumbs\/街景\.mp4-1\.jpg \| thumbs\/街景\.mp4-2\.jpg \| thumbs\/街景\.mp4-3\.jpg/);
+      assert.equal(await js("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent === 'thumbs')"), false);
+      // 更新说明 leaves finished screenshots alone and remakes a missing one.
+      fs.rmSync(shots[1]);
+      await js("document.getElementById('index').click()");
+      await until("document.getElementById('status').textContent.includes('已为 1 个视频生成截图')", 'missing screenshot remade'); await idle();
+      assert.ok(fs.existsSync(shots[1]));
+    } else console.log('ffmpeg not found: skipped the video screenshot step');
+
     await stage([extra, album]);
     await until(`${tray}.includes('extra.txt')`, 'staged for screenshot');
     await delay(500);
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'), screenshot.toPNG());
-    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, rename, close details, delete; screenshot saved.');
+    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, rename, close details, delete, video screenshots; screenshot saved.');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

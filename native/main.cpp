@@ -81,6 +81,19 @@ fs::path resolve(const fs::path& root, const std::string& rel) {
 struct Batch { Meta header; std::map<std::string,Meta> files; };
 bool isReadme(const fs::path& file) { return lower(utf(file.filename()))=="file-readme.txt"; }
 bool isScratch(const fs::path& file) { auto n=lower(utf(file.filename())); return n=="file-readme.txt.tmp" || n=="file-readme.txt.backup"; }
+// Every folder with videos keeps a "thumbs" folder of screenshots (3 per video, listed under Thumbnails in
+// file-readme.txt). It is File Hero's own folder: hidden from listings, search and indexing.
+bool isThumbs(const fs::path& p) { std::error_code ec; return lower(utf(p.filename()))=="thumbs" && fs::is_directory(p,ec); }
+bool isVideo(const fs::path& p) {
+  static const std::set<std::string> ext{".mp4",".mov",".m4v",".3gp",".mkv",".webm",".avi"};
+  return ext.count(lower(utf(p.extension())))>0;
+}
+std::vector<std::string> thumbList(const Meta& m) {
+  std::vector<std::string> out; auto it=m.find("Thumbnails"); if(it==m.end()) return out;
+  const auto& s=it->second; size_t at=0;
+  while(at<=s.size()) { auto end=s.find(" | ",at); if(end==std::string::npos) end=s.size(); if(end>at) out.push_back(s.substr(at,end-at)); at=end+3; }
+  return out;
+}
 fs::path manifestPath(const fs::path& folder) {
   auto p=folder/"file-readme.txt"; require(!fs::is_symlink(fs::symlink_status(p)),"说明文件是不安全的符号链接"); return p;
 }
@@ -156,7 +169,7 @@ std::string cover(const fs::path& dir) {
 void indexTree(const fs::path& p, int& count) {
   auto batch=readBatch(p); auto previous=batch.files; batch.files.clear();
   for(const auto& e:fs::directory_iterator(p)) {
-    if(e.path().filename()==".file-hero" || e.is_symlink()) continue;
+    if(e.path().filename()==".file-hero" || e.is_symlink() || isThumbs(e.path())) continue;
     if(e.is_directory()) indexTree(e.path(),count);
     else if(e.is_regular_file() && !isReadme(e.path()) && !isScratch(e.path())) {auto name=utf(e.path().filename()); batch.files[name]=record(e.path(),previous[name]); ++count;}
   }
@@ -229,7 +242,7 @@ void copyTree(const fs::path& src, const fs::path& dst, Progress& p, const std::
   std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){return x.path()<y.path();});
   std::set<std::string> taken;
   for(const auto& e:entries) {
-    if(skipped(e) || (manifest && isReadme(e.path()))) continue;
+    if(skipped(e) || (manifest && isReadme(e.path())) || isThumbs(e.path())) continue;
     auto original=utf(e.path().filename()); auto name=portableName(original,"shared",taken);
     if(e.is_directory()) copyTree(e.path(),dst/fs::u8path(name),p);
     else if(e.is_regular_file()) {
@@ -308,7 +321,7 @@ std::wstring folded(const std::string& s) {
 Batch batchOrEmpty(const fs::path& dir) { try { return readBatch(dir,false); } catch(...) { return {}; } }
 void searchTree(const fs::path& root, const fs::path& dir, Batch& batch, const std::wstring& query, std::string& out, size_t& found, bool& truncated) {
   std::vector<fs::directory_entry> entries; std::error_code ec;
-  for(const auto& e:fs::directory_iterator(dir,ec)) if(e.path().filename()!=".file-hero" && !e.is_symlink(ec) && (e.is_directory(ec) || e.is_regular_file(ec))) entries.push_back(e);
+  for(const auto& e:fs::directory_iterator(dir,ec)) if(e.path().filename()!=".file-hero" && !e.is_symlink(ec) && !isThumbs(e.path()) && (e.is_directory(ec) || e.is_regular_file(ec))) entries.push_back(e);
   std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){if(x.is_directory()!=y.is_directory()) return x.is_directory(); return x.path()<y.path();});
   for(const auto& e:entries) {
     if(truncated) return;
@@ -327,7 +340,7 @@ void searchTree(const fs::path& root, const fs::path& dir, Batch& batch, const s
 }
 int run(const std::vector<std::string>& a) {
   try {
-    require(a.size()>=2, "Usage: core <drives|setup|list|search|index|batch|append|import|export|describe|rename|mkdir|delete> <root> <relative-path> [arguments]");
+    require(a.size()>=2, "Usage: core <drives|setup|list|search|index|batch|append|import|export|describe|rename|thumbs|videos|mkdir|delete> <root> <relative-path> [arguments]");
     if(a[1]=="drives") { std::cout << drives(); return 0; }
     if(a[1]=="setup") {
       // All data lives in <SSD>/file-hero, the same folder the Android app uses.
@@ -342,7 +355,7 @@ int run(const std::vector<std::string>& a) {
     auto p=resolve(root,a[3]); auto cmd=a[1];
     if(cmd=="list") {
       require(fs::is_directory(p),"找不到文件夹"); std::vector<fs::directory_entry> entries;
-      for(const auto& e:fs::directory_iterator(p)) if(e.path().filename()!=".file-hero" && !e.is_symlink()) entries.push_back(e);
+      for(const auto& e:fs::directory_iterator(p)) if(e.path().filename()!=".file-hero" && !e.is_symlink() && !isThumbs(e.path())) entries.push_back(e);
       std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){if(x.is_directory()!=y.is_directory()) return x.is_directory(); return x.path()<y.path();});
       auto s=fs::space(root); std::string out="{\"capacity\":"+std::to_string(s.capacity)+",\"available\":"+std::to_string(s.available)+",\"entries\":["; bool first=true;
       for(const auto& e:entries) {
@@ -359,6 +372,7 @@ int run(const std::vector<std::string>& a) {
       require(fs::is_directory(p),"找不到文件夹"); int n=0; indexTree(p,n); std::cout << "{\"indexed\":" << n << "}";
     } else if(cmd=="mkdir") {
       require(a.size()==5,"缺少文件夹名称"); nameCheck(a[4]); require(fs::is_directory(p),"找不到文件夹");
+      require(lower(a[4])!="thumbs","thumbs 是视频截图文件夹的保留名称");
       require(fs::create_directory(resolve(root,utf(fs::relative(p,root)/fs::u8path(a[4])))),"文件夹已存在"); std::cout << "{}";
     } else if(cmd=="describe") {
       require(a.size()==5 && fs::is_regular_file(p),"缺少文件或描述"); std::cout << metaJson(writeMeta(p,&a[4]));
@@ -402,13 +416,48 @@ int run(const std::vector<std::string>& a) {
       auto parent=p.parent_path(); Batch batch; bool update=false;
       if(!isReadme(p)) try { update=fs::exists(manifestPath(parent)); batch=readBatch(parent); } catch(...) { update=false; }
       fs::remove(p); std::string warning;
-      if(update) { batch.files.erase(utf(p.filename())); try { writeBatch(parent,batch); } catch(const std::exception& e) { warning=std::string("文件已删除，但说明未完整更新：")+e.what(); } }
+      if(update) {
+        std::error_code ec;
+        for(const auto& t:thumbList(batch.files[utf(p.filename())])) if(t.rfind("thumbs/",0)==0) fs::remove(parent/fs::u8path(t),ec);
+        if(fs::is_directory(parent/"thumbs",ec) && fs::is_empty(parent/"thumbs",ec)) fs::remove(parent/"thumbs",ec);
+        batch.files.erase(utf(p.filename())); try { writeBatch(parent,batch); } catch(const std::exception& e) { warning=std::string("文件已删除，但说明未完整更新：")+e.what(); } }
       std::cout << "{\"deleted\":true,\"warning\":" << quote(warning) << "}";
+    } else if(cmd=="thumbs") {
+      // thumbs <root> <video> <"thumbs/a.mp4-1.jpg | ..." or empty>: records the video's screenshots.
+      require(a.size()==5 && fs::is_regular_file(p) && isVideo(p),"缺少视频或截图"); oneLine(a[4]);
+      Meta list; list["Thumbnails"]=a[4];
+      for(const auto& t:thumbList(list)) { require(t.rfind("thumbs/",0)==0,"截图必须在 thumbs 文件夹"); nameCheck(t.substr(7)); }
+      auto b=readBatch(p.parent_path()); auto& m=b.files[utf(p.filename())]; m=record(p,m);
+      if(a[4].empty()) m.erase("Thumbnails"); else m["Thumbnails"]=a[4];
+      writeBatch(p.parent_path(),b); auto result=m; result["Format"]="file-hero/batch-v1"; std::cout << metaJson(result);
+    } else if(cmd=="videos") {
+      // videos <root> <folder>: videos in this folder and its subfolders whose screenshots are not all there.
+      require(fs::is_directory(p),"找不到文件夹"); std::string out; bool first=true;
+      std::vector<fs::path> dirs{p};
+      while(!dirs.empty()) {
+        auto dir=dirs.back(); dirs.pop_back(); Batch batch; bool writable=true;
+        try { batch=readBatch(dir); } catch(...) { writable=false; }
+        std::vector<fs::directory_entry> entries; std::error_code ec;
+        for(const auto& e:fs::directory_iterator(dir,ec)) entries.push_back(e);
+        std::sort(entries.begin(),entries.end(),[](const auto& x,const auto& y){return x.path()<y.path();});
+        for(const auto& e:entries) {
+          if(e.is_symlink(ec) || e.path().filename()==".file-hero") continue;
+          if(e.is_directory(ec)) { if(!isThumbs(e.path())) dirs.push_back(e.path()); continue; }
+          if(!writable || !e.is_regular_file(ec) || !isVideo(e.path())) continue;
+          auto name=utf(e.path().filename()); auto shots=thumbList(batch.files.count(name)?batch.files[name]:Meta{});
+          bool ready=shots.size()==3; for(const auto& t:shots) if(!fs::is_regular_file(dir/fs::u8path(t),ec)) ready=false;
+          if(ready) continue;
+          if(!first) out+=",";
+          first=false; out+="{\"path\":"+quote(fs::relative(e.path(),root).generic_u8string())+",\"size\":"+std::to_string(e.file_size())+"}";
+        }
+      }
+      std::cout << "[" << out << "]";
     } else if(cmd=="rename") {
       // rename <root> <file-or-folder> <new-name>: the description in file-readme.txt follows the file.
       require(a.size()==5 && p!=root && !a[3].empty(),"缺少新名称"); require(fs::exists(p),"找不到文件或文件夹");
       require(!isReadme(p) && !isScratch(p),"file-readme.txt 是批次说明，不能重命名");
       auto name=a[4]; nameCheck(name); auto low=lower(name);
+      require(!(low=="thumbs" && fs::is_directory(p)),"thumbs 是视频截图文件夹的保留名称");
       require(low!="file-readme.txt" && low!="file-readme.txt.tmp" && low!="file-readme.txt.backup","file-readme.txt 是批次说明的保留名称");
       auto parent=p.parent_path(), dest=parent/fs::u8path(name); auto old=utf(p.filename()); std::string warning;
       if(name==old) { std::cout << "{\"name\":" << quote(name) << ",\"warning\":\"\"}"; return 0; }
@@ -423,8 +472,18 @@ int run(const std::vector<std::string>& a) {
         try { update=fs::exists(manifestPath(parent)); if(update) batch=readBatch(parent); } catch(...) { update=false; }
         fs::rename(p,dest);
         if(update && batch.files.count(old)) {
-          auto meta=batch.files[old]; batch.files.erase(old); meta["Name"]=name; batch.files[name]=meta;
-          try { writeBatch(parent,batch); } catch(...) { fs::rename(dest,p); throw; }
+          auto meta=batch.files[old]; batch.files.erase(old); meta["Name"]=name;
+          // Screenshots are named after their video, so they are renamed along with it.
+          std::vector<std::pair<fs::path,fs::path>> moved; std::string shots;
+          for(const auto& t:thumbList(meta)) {
+            auto prefix="thumbs/"+old+"-"; auto next=t.rfind(prefix,0)==0 ? "thumbs/"+name+"-"+t.substr(prefix.size()) : t;
+            std::error_code ec; auto from=parent/fs::u8path(t), to=parent/fs::u8path(next);
+            if(next!=t && fs::is_regular_file(from,ec) && !fs::exists(to,ec)) { fs::rename(from,to,ec); if(ec) next=t; else moved.push_back({from,to}); }
+            shots+=(shots.empty()?"":" | ")+next;
+          }
+          if(!shots.empty()) meta["Thumbnails"]=shots;
+          batch.files[name]=meta;
+          try { writeBatch(parent,batch); } catch(...) { std::error_code ec; for(const auto& m:moved) fs::rename(m.second,m.first,ec); fs::rename(dest,p); throw; }
         }
       }
       std::cout << "{\"name\":" << quote(name) << ",\"warning\":" << quote(warning) << "}";

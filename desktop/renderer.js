@@ -10,6 +10,7 @@ const isReadme = name => name.toLowerCase() === 'file-readme.txt';
 const previewable = name => /\.(jpe?g|png|gif|webp|bmp|heic|heif|mp4|mov|m4v|3gp|mkv|webm|avi|pdf)$/i.test(name);
 const day = text => (text || 'unknown').split('T')[0];
 function status(message) { $('status').textContent = message; }
+const shotsNote = t => !t ? '' : `${t.made ? `已为 ${t.made} 个视频生成截图。` : ''}${t.failed ? `${t.failed} 个视频无法截图（格式不支持或文件损坏）。` : ''}${t.error ? `视频截图未完成：${t.error}` : ''}`;
 function controls() {
   for (const id of ['index','mkdir','import','refresh','save','open','rename','reveal','export','delete']) $(id).disabled = working || !connected;
   $('switchDrive').disabled = working || !connected; $('up').disabled = working || !folder;
@@ -266,7 +267,7 @@ $('shareSave').onclick = async () => {
     const r = await hero.invoke('share-save', '', JSON.stringify(form));
     sharing = null; stagedThumbs.clear(); renderTray();
     folder = r.path; await reload();
-    status(`已复制到「${r.batch}」：${r.imported} 个文件，说明已写入 file-readme.txt。`);
+    status(`已复制到「${r.batch}」：${r.imported} 个文件，说明已写入 file-readme.txt。${shotsNote(r.thumbs)}`);
   } catch (error) { $('shareError').textContent = `未能存入：${error.message}`; status('存入未完成，SSD 上没有留下这批文件'); }
   finally { saving = false; working = false; controls(); $('shareProgress').hidden = true; $('shareProgressText').textContent = ''; renderTray(); }
 };
@@ -301,7 +302,7 @@ $('search').oninput = () => { clearTimeout(searchTimer); if (!$('search').value.
 $('refresh').onclick = () => task(async () => { await reload(); status('已刷新'); });
 $('up').onclick = () => enter(folder.split('/').slice(0, -1).join('/'));
 $('import').onclick = () => task(async () => { status(await hero.invoke('pick-files') ? '已加入待存入区' : '已取消选择'); });
-$('index').onclick = () => task(async () => { const r = await hero.invoke('index', folder); await reload(); status(`已将 ${r.indexed} 个文件的信息更新到各文件夹的 file-readme.txt`); });
+$('index').onclick = () => task(async () => { const r = await hero.invoke('index', folder); await reload(); status(`已将 ${r.indexed} 个文件的信息更新到各文件夹的 file-readme.txt。${shotsNote(r.thumbs)}`); });
 $('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').returnValue = ''; $('folderDialog').showModal(); };
 // Cancel is not a submit button, so Enter in the name field creates the folder.
 $('folderCancel').onclick = () => $('folderDialog').close('cancel');

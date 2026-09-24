@@ -100,6 +100,38 @@ async function poll() {
   finally { polling = false; }
 }
 
+// Video screenshots: a hidden window decodes each video that lacks them; the JPEGs go into the video's
+// thumbs folder and are listed under Thumbnails in file-readme.txt, where an AI can read them to describe the video.
+let capturer = null;
+async function captureWindow() {
+  if (capturer && !capturer.isDestroyed()) return capturer;
+  capturer = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
+  capturer.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  capturer.webContents.on('will-navigate', event => event.preventDefault());
+  await capturer.loadFile(path.join(__dirname, 'thumbs.html'));
+  return capturer;
+}
+async function makeThumbs(folder) {
+  const videos = await inRoot('videos', folder);
+  let made = 0, failed = 0;
+  try {
+    for (const [index, video] of videos.entries()) {
+      send('notice', { message: `正在生成视频截图 ${index + 1} / ${videos.length}：${path.posix.basename(video.path)}（请勿拔出 SSD）` });
+      const file = local(video.path), name = path.basename(file);
+      const shots = await (await captureWindow()).webContents.executeJavaScript(`capture(${JSON.stringify(pathToFileURL(file).href)})`).catch(() => null);
+      if (!Array.isArray(shots) || shots.length !== 3) { failed++; continue; }
+      const dir = path.join(path.dirname(file), 'thumbs'); fs.mkdirSync(dir, { recursive: true });
+      const names = shots.map((shot, n) => {
+        const thumb = `${name}-${n + 1}.jpg`;
+        fs.writeFileSync(path.join(dir, thumb), Buffer.from(shot.slice(shot.indexOf(',') + 1), 'base64'));
+        return `thumbs/${thumb}`;
+      });
+      await inRoot('thumbs', video.path, names.join(' | ')); made++;
+    }
+  } finally { if (capturer && !capturer.isDestroyed()) capturer.destroy(); capturer = null; }
+  return { made, failed };
+}
+
 // Folder totals for the share dialog; stops counting after 20000 entries so huge folders still open quickly.
 function measure(folder) {
   const total = { size: 0, files: 0, partial: false }; const stack = [folder]; let seen = 0;
@@ -216,7 +248,10 @@ else {
           const args = form.mode === 'existing' ? ['append', root, form.folder, form.description, ...shares] : ['batch', root, form.folder, form.name, form.description, ...shares];
           if (!root) throw new Error('未检测到 SSD，请插入 SSD 后重试');
           const result = await core(args, progress);
-          shares = []; return result;
+          shares = [];
+          // The files are safely stored; screenshots that cannot be made are only reported.
+          try { result.thumbs = await makeThumbs(result.path); } catch (error) { result.thumbs = { made: 0, failed: 0, error: error.message }; }
+          return result;
         }
         if (action === 'export' && value === 'directory') {
           const result = await dialog.showOpenDialog(window, { title: `导出文件夹「${path.basename(relative)}」到…（会在所选位置新建同名文件夹）`, properties: ['openDirectory', 'createDirectory'] });
@@ -227,7 +262,8 @@ else {
           return result.canceled ? null : await inRoot('export', relative, result.filePath);
         }
         if (action === 'delete') return await inRoot('delete', relative);
-        if (['index', 'mkdir', 'describe', 'rename'].includes(action)) return await inRoot(action, relative, ...(action === 'index' ? [] : [value]));
+        if (action === 'index') { const result = await inRoot('index', relative); result.thumbs = await makeThumbs(relative); return result; }
+        if (['mkdir', 'describe', 'rename'].includes(action)) return await inRoot(action, relative, value);
         throw new Error('Unknown action');
       } finally { busy = false; }
     });
