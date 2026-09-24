@@ -49,6 +49,7 @@ void main() {
   tearDown(() { TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null); });
   testWidgets('home only explains sharing and removes old actions', (tester) async {
     await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.widgetWithText(AppBar, 'File Hero'), findsOneWidget);
     expect(find.byIcon(Icons.usb), findsNothing);
     expect(find.text('选择文件并存入 SSD'), findsNothing);
     expect(find.textContaining('点击分享 → File Hero'), findsOneWidget);
