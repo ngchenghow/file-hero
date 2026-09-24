@@ -1,7 +1,7 @@
 name: file_hero
 description: Portable SSD file manager with shared per-file readme metadata.
 publish_to: none
-version: 0.1.4+5
+version: 0.1.5+6
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
