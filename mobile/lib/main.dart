@@ -212,13 +212,37 @@ class _FilesPageState extends State<FilesPage> {
       Text('容量：${size((file['size'] as num).toInt())}\n修改日期：${file['modified']}\n首次建档：${meta['First-Indexed-UTC'] ?? '尚未建档'}\n上一次存入：${meta['Last-Stored-UTC'] == 'unknown' ? '未知' : meta['Last-Stored-UTC'] ?? '未知'}'), const SizedBox(height: 20), Text((meta['Description'] as String?)?.isNotEmpty == true ? meta['Description'] as String : '尚未填写文件描述'), const SizedBox(height: 20),
       FilledButton.icon(onPressed: () => Navigator.pop(context, 'describe'), icon: const Icon(Icons.edit_outlined), label: const Text('编辑说明')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'export'), icon: const Icon(Icons.download_outlined), label: const Text('导出文件副本')),
+      TextButton.icon(onPressed: () => Navigator.pop(context, 'send'), icon: const Icon(Icons.bluetooth), label: const Text('蓝牙导出到其他设备')),
       const Text('本批所有文件的描述统一保存在当前文件夹的 file-readme.txt。', style: TextStyle(fontSize: 11, color: Colors.grey)),
     ])))));
     if(!mounted || action == null) return;
-    if(action == 'describe') {
+    if(action == 'send') {
+      await sendMenu(file);
+    } else if(action == 'describe') {
       final description = await textPrompt('文件描述', initial: meta['Description'] as String? ?? '');
       if(description != null) { await work(() async { await call('describe', {'path': child(file['name'] as String), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
     } else { await work(() async { final result = await call('export', {'path': child(file['name'] as String)}); if(mounted) { setState(() => message = result == true ? '已导出文件副本' : '已取消导出'); } }); }
+  }
+  Future<void> sendMenu(Map<String,dynamic> file) async {
+    final name = file['name'] as String;
+    final directory = file['directory'] == true;
+    final via = await showModalBottomSheet<String>(context: context, builder: (context) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      ListTile(title: Text('导出「$name」到其他设备'), subtitle: Text(directory ? '发送此文件夹内的全部文件，包括说明 file-readme.txt（不含子文件夹）' : '发送的是副本，SSD 上的文件保持不变')),
+      ListTile(leading: const Icon(Icons.bluetooth), title: const Text('蓝牙发送'), subtitle: const Text('选择已配对或附近的设备；对方需开启蓝牙并接受文件'), onTap: () => Navigator.pop(context, 'bluetooth')),
+      ListTile(leading: const Icon(Icons.share_outlined), title: const Text('其他方式发送'), subtitle: const Text('附近分享、聊天软件等'), onTap: () => Navigator.pop(context, 'chooser')),
+    ])));
+    if(!mounted || via == null) return;
+    await work(() async {
+      final status = await call('ssdStatus') as Map?;
+      if(!mounted) return;
+      if(status?['state'] == 'missing') { setState(() => message = '未检测到 SSD，无法发送。请连接 SSD 后重试。'); return; }
+      final result = Map<String,dynamic>.from(await call('send', {'path': child(name), 'directory': directory, 'via': via}) as Map);
+      if(!mounted) return;
+      final count = result['files'];
+      setState(() => message = result['via'] == 'bluetooth'
+        ? '已打开蓝牙发送（$count 个文件）。请选择接收设备，传输完成前请勿拔出 SSD。'
+        : via == 'bluetooth' ? '此手机没有可直接调用的蓝牙发送，请在列表中选择「蓝牙」（$count 个文件）。传输完成前请勿拔出 SSD。' : '请在列表中选择发送方式（$count 个文件）。传输完成前请勿拔出 SSD。');
+    });
   }
   Widget preview(Map<String,dynamic> file) {
     final name = file['name'] as String;
@@ -247,6 +271,7 @@ class _FilesPageState extends State<FilesPage> {
           Text(directory ? '${file['fileCount'] ?? '—'} 个文件 · ${size((file['size'] as num).toInt())}' : size((file['size'] as num).toInt()), style: const TextStyle(fontSize: 11, color: Colors.grey)),
           Text('日期：${(file['modified'] as String? ?? 'unknown').split('T').first}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
         ])),
+        IconButton(tooltip: '发送 ${file['name']}', onPressed: busy ? null : () => sendMenu(file), icon: const Icon(Icons.bluetooth)),
         IconButton(tooltip: '删除 ${file['name']}', onPressed: busy ? null : () => deleteEntry(file), icon: const Icon(Icons.delete_outline), color: Theme.of(context).colorScheme.error),
       ])),
     ));

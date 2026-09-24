@@ -1,6 +1,7 @@
 package com.filehero.file_hero
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -223,6 +224,19 @@ class MainActivity : FlutterActivity() {
             return
         }
         val path = call.argument<String>("path") ?: ""
+        if(call.method == "send") {
+            val directory = call.argument<Boolean>("directory") ?: false; val via = call.argument<String>("via") ?: "bluetooth"
+            worker.execute {
+                try {
+                    val (intent, used, count) = sendIntent(resolve(path), directory, via)
+                    runOnUiThread {
+                        try { startActivity(intent); active = false; result.success(mapOf("via" to used, "files" to count)) }
+                        catch(e: Exception) { active = false; result.error("STORAGE", e.message ?: "无法打开发送界面", null) }
+                    }
+                } catch(e: Exception) { runOnUiThread { active = false; result.error("STORAGE", e.message, null) } }
+            }
+            return
+        }
         if(call.method in listOf("connect", "pickFiles", "export")) {
             try {
                 pending = result; pendingKind = call.method; pendingPath = path
@@ -346,6 +360,29 @@ class MainActivity : FlutterActivity() {
         }
         selectedSources = emptyList()
         return mapOf("batch" to (dest.name ?: batchName), "imported" to sources.size, "path" to if(existing) "" else (dest.name ?: batchName), "warning" to warning)
+    }
+    // Hands SSD files to the system Bluetooth sender (OPP), or to the share chooser when Bluetooth is unavailable.
+    @Suppress("DEPRECATION")
+    private fun sendIntent(file: DocumentFile, directory: Boolean, via: String): Triple<Intent,String,Int> {
+        require(file.exists() && file.isDirectory == directory) { "项目类型已改变，请刷新后重试" }
+        val files = if(directory) file.listFiles().filter { it.isFile && it.name !in listOf("file-readme.txt.tmp", "file-readme.txt.backup") }.sortedBy { it.name } else listOf(file)
+        require(files.isNotEmpty()) { "文件夹里没有可发送的文件" }
+        val uris = ArrayList(files.map { it.uri })
+        val types = files.map { contentResolver.getType(it.uri) ?: "application/octet-stream" }.distinct()
+        val type = types.singleOrNull() ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
+        val send = (if(uris.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0]) else Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris))
+            .setType(type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        send.clipData = ClipData.newRawUri(files[0].name, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+        if(via == "bluetooth") {
+            val bluetooth = packageManager.queryIntentActivities(send, 0).firstOrNull { it.activityInfo.packageName != packageName && it.activityInfo.packageName.contains("bluetooth", true) }
+            if(bluetooth != null) {
+                val pkg = bluetooth.activityInfo.packageName
+                // The Bluetooth service reads files after its launcher activity closes, so grant the package directly.
+                uris.forEach { grantUriPermission(pkg, it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                return Triple(send.setClassName(pkg, bluetooth.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "bluetooth", files.size)
+            }
+        }
+        return Triple(Intent.createChooser(send, "发送到其他设备"), "chooser", files.size)
     }
     private fun copy(source: Uri, target: Uri) {
         contentResolver.openInputStream(source)?.use { input -> contentResolver.openOutputStream(target, "wt")?.use { output -> input.copyTo(output, 1024 * 1024) } ?: error("无法写入目标") } ?: error("无法读取源文件")

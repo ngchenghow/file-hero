@@ -13,4 +13,9 @@
         </activity>
         <meta-data android:name="flutterEmbedding" android:value="2" />
     </application>
+    <!-- Lets the app find the system Bluetooth sender on Android 11+ package visibility. -->
+    <queries>
+        <intent><action android:name="android.intent.action.SEND" /><data android:mimeType="*/*" /></intent>
+        <intent><action android:name="android.intent.action.SEND_MULTIPLE" /><data android:mimeType="*/*" /></intent>
+    </queries>
 </manifest>
