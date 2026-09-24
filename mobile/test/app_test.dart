@@ -11,13 +11,18 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late List<MethodCall> calls;
   late bool shared, fail, cancelPicker, deleted, fileMode, deleteFails;
+  late int shareErrors, queued;
   String? target;
   setUp(() {
-    deleted = false; fileMode = false; deleteFails = false; calls = []; shared = false; fail = false; cancelPicker = false; target = null;
+    shareErrors = 0; queued = 0; deleted = false; fileMode = false; deleteFails = false; calls = []; shared = false; fail = false; cancelPicker = false; target = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       switch(call.method) {
-        case 'takeSharedFiles': if(!shared) return null; shared = false; return ['photo.jpg'];
+        case 'takeSharedFiles':
+          if(!shared) return null;
+          if(shareErrors > 0) { shareErrors--; throw PlatformException(code: 'SHARE', message: '无法读取源文件', details: true); }
+          shared = false; return {'files': ['photo.jpg'], 'pending': queued};
+        case 'discardShare': shared = false; return 0;
         case 'restoreTarget': return target;
         case 'connect': return cancelPicker ? null : '旅行资料';
         case 'importSelected':
@@ -142,4 +147,26 @@ void main() {
     expect(calls[index].arguments['existing'], false);
   });
 
+  testWidgets('unreadable share shows dialog and can be retried', (tester) async {
+    target = 'SSD'; shared = true; shareErrors = 1;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.text('无法接收这次分享'), findsOneWidget);
+    expect(find.text('无法读取源文件'), findsOneWidget);
+    await tester.tap(find.text('重试')); await advance(tester);
+    expect(find.text('分享文件存入 SSD'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'discardShare'), isEmpty);
+  });
+  testWidgets('unreadable share can be discarded explicitly', (tester) async {
+    target = 'SSD'; shared = true; shareErrors = 1;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('放弃这批')); await advance(tester);
+    expect(calls.where((c) => c.method == 'discardShare').length, 1);
+    expect(find.text('分享文件存入 SSD'), findsNothing);
+    expect(find.text('已放弃无法读取的分享，未存入任何文件'), findsOneWidget);
+  });
+  testWidgets('share dialog tells user about queued shares', (tester) async {
+    target = 'SSD'; shared = true; queued = 2;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.text('另有 2 批分享在排队，处理完这批后会继续'), findsOneWidget);
+  });
 }

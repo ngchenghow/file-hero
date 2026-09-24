@@ -26,24 +26,32 @@ class _FilesPageState extends State<FilesPage> {
   List<Map<String, dynamic>> entries = [];
   final Map<String, Future<Uint8List?>> thumbnails = {};
   bool checkingShares = false, sharePending = false;
+  final queuedShares = ValueNotifier<int>(0);
   @override
   void initState() {
     super.initState();
     channel.setMethodCallHandler((event) async {
-      if(event.method == 'shareAvailable') { sharePending = true; await checkShares(); }
+      if(event.method == 'shareAvailable') {
+        queuedShares.value = event.arguments as int? ?? queuedShares.value + 1;
+        if(busy && mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('收到新的分享，完成当前操作后会继续'))); }
+        sharePending = true; await checkShares();
+      }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) { if(mounted) { sharePending = true; checkShares(); } });
   }
   @override
-  void dispose() { channel.setMethodCallHandler(null); super.dispose(); }
+  void dispose() { channel.setMethodCallHandler(null); queuedShares.dispose(); super.dispose(); }
   Future<void> checkShares() async {
     if(!mounted || busy || checkingShares) return;
     checkingShares = true; sharePending = false;
     final previousMessage = message;
     await work(() async {
-      final picked = await call('takeSharedFiles') as List?;
+      Map? taken;
+      try { taken = await call('takeSharedFiles') as Map?; }
+      on PlatformException catch(e) { await shareFailed(e); return; }
       if(!mounted) return;
-      if(picked == null) {
+      if(taken == null) {
+        queuedShares.value = 0;
         if(!connected) {
           final target = await call('restoreTarget') as String?;
           if(!mounted) return;
@@ -52,11 +60,28 @@ class _FilesPageState extends State<FilesPage> {
         if(mounted) { setState(() => message = previousMessage); }
         return;
       }
+      queuedShares.value = taken['pending'] as int? ?? 0;
       sharePending = true;
-      await saveShared(picked.cast<String>());
+      await saveShared((taken['files'] as List).cast<String>());
     });
     checkingShares = false;
     if(mounted && sharePending) { Future<void>.microtask(checkShares); }
+  }
+  // The failed batch stays queued natively until the user retries or discards it.
+  Future<void> shareFailed(PlatformException e) async {
+    if(!mounted) return;
+    final retryable = e.details == true || e.code == 'BUSY';
+    final retry = await showDialog<bool>(context: context, barrierDismissible: false, builder: (context) => AlertDialog(
+      title: const Text('无法接收这次分享'),
+      content: Text(e.message ?? '分享的文件无法读取'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('放弃这批')), if(retryable) FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('重试'))],
+    ));
+    if(!mounted) return;
+    if(retry != true) {
+      queuedShares.value = await call('discardShare') as int? ?? 0;
+      if(mounted) { setState(() => message = '已放弃无法读取的分享，未存入任何文件'); }
+    }
+    sharePending = true;
   }
   Future<void> saveShared(List<String> picked) async {
     final target = await call('restoreTarget') as String?;
@@ -67,7 +92,7 @@ class _FilesPageState extends State<FilesPage> {
     var existingReady = false;
     while(true) {
       if(!mounted) return;
-      final form = await showDialog<Map<String,String>>(context: context, builder: (context) => _ShareSaveDialog(target: driveName, initialName: name, initialDescription: description, initialMode: mode, existingReady: existingReady, count: picked.length));
+      final form = await showDialog<Map<String,String>>(context: context, builder: (context) => _ShareSaveDialog(target: driveName, initialName: name, initialDescription: description, initialMode: mode, existingReady: existingReady, count: picked.length, queued: queuedShares));
       if(!mounted) return;
       if(form == null) {
         if(connected) { await load(''); }
@@ -212,10 +237,11 @@ class _FilesPageState extends State<FilesPage> {
 }
 
 class _ShareSaveDialog extends StatefulWidget {
-  const _ShareSaveDialog({required this.target, required this.initialName, required this.initialDescription, required this.initialMode, required this.existingReady, required this.count});
+  const _ShareSaveDialog({required this.target, required this.initialName, required this.initialDescription, required this.initialMode, required this.existingReady, required this.count, required this.queued});
   final String target, initialName, initialDescription, initialMode;
   final bool existingReady;
   final int count;
+  final ValueNotifier<int> queued;
   @override
   State<_ShareSaveDialog> createState() => _ShareSaveDialogState();
 }
@@ -237,7 +263,9 @@ class _ShareSaveDialogState extends State<_ShareSaveDialog> {
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('分享文件存入 SSD'),
     content: SingleChildScrollView(child: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('已接收 ${widget.count} 个文件'), const SizedBox(height: 12),
+      Text('已接收 ${widget.count} 个文件'),
+      ValueListenableBuilder<int>(valueListenable: widget.queued, builder: (context, queued, _) => queued > 0 ? Padding(padding: const EdgeInsets.only(top: 6), child: Text('另有 $queued 批分享在排队，处理完这批后会继续', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.primary))) : const SizedBox.shrink()),
+      const SizedBox(height: 12),
       Wrap(spacing: 8, children: [ChoiceChip(label: const Text('新建文件夹'), selected: mode == 'new', onSelected: (_) => selectMode('new')), ChoiceChip(label: const Text('已有文件夹'), selected: mode == 'existing', onSelected: (_) => selectMode('existing'))]),
       const SizedBox(height: 12),
       Text(mode == 'new' ? '新文件夹将直接建立在 SSD 根目录。首次存入时需授权根目录。' : !existingReady ? '请选择要存入的已有文件夹' : '目标：${widget.target}'),

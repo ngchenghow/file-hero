@@ -129,17 +129,29 @@ class MainActivity : FlutterActivity() {
         incoming.clipData?.let { clip -> for(i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
         // Only use delegated content URIs, never sender-supplied filesystem paths.
         sharedBatches.addLast(uris.distinct().filter { it.scheme == "content" })
-        storageChannel?.invokeMethod("shareAvailable", null)
+        storageChannel?.invokeMethod("shareAvailable", sharedBatches.size)
+    }
+    // Turn sender-supplied names into safe, unique portable names instead of rejecting the share.
+    private fun portableName(raw: String?, fallback: String, taken: MutableSet<String>): String {
+        var name = (raw ?: "").map { if(it in "/\\:<>\"|?*" || it.code < 32 || it.code == 127) '_' else it }.joinToString("").trim().trimEnd('.', ' ')
+        if(name.isEmpty() || name == "." || name == "..") name = fallback
+        if(name.lowercase(Locale.ROOT) in listOf(".file-hero", "file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")) name = "shared-$name"
+        if(name.substringBefore('.').uppercase(Locale.ROOT).matches(Regex("CON|PRN|AUX|NUL|(COM|LPT)[1-9]"))) name = "_$name"
+        val dot = name.lastIndexOf('.').takeIf { it > 0 && name.length - it <= 16 } ?: name.length
+        val stem = name.substring(0, dot).take(120).trimEnd('.', ' '); val ext = name.substring(dot)
+        var candidate = stem + ext; var n = 2
+        while(!taken.add(candidate.lowercase(Locale.ROOT))) candidate = "$stem (${n++})$ext"
+        valid(candidate)
+        return candidate
     }
     private fun sourceFiles(uris: List<Uri>): List<Pair<Uri,String>> {
         require(uris.isNotEmpty()) { "分享中没有可读取的文件，请从相册或文件管理器分享文件" }
         val names = mutableSetOf<String>()
-        return uris.distinct().map { source ->
-            val name = contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: error("无法读取分享文件名，请重新分享")
-            valid(name)
-            require(name.lowercase(Locale.ROOT) !in listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")) { "file-readme.txt 保留给批次说明" }
-            require(names.add(name.lowercase(Locale.ROOT))) { "文件有重名，请分批存入" }
-            source to name
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        return uris.distinct().mapIndexed { i, source ->
+            val raw = try { contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if(it.moveToFirst()) it.getString(0) else null } } catch(_: Exception) { null }
+            val ext = contentResolver.getType(source)?.let { android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }?.let { ".$it" } ?: ""
+            source to portableName(raw, "shared-$stamp-${i + 1}$ext", names)
         }
     }
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
@@ -154,11 +166,22 @@ class MainActivity : FlutterActivity() {
         if(active) { result.error("BUSY", "文件操作仍在进行", null); return }
         active = true
         if(call.method == "takeSharedFiles") {
-            val uris = sharedBatches.pollFirst()
+            // Keep the batch queued until it is readable, so a failure can be retried or explicitly discarded.
+            val uris = sharedBatches.peekFirst()
             if(uris == null) { active = false; result.success(null); return }
-            background(result) { val sources = sourceFiles(uris); selectedSources = sources; sources.map { it.second } }
+            worker.execute {
+                try {
+                    val sources = sourceFiles(uris)
+                    runOnUiThread {
+                        if(sharedBatches.peekFirst() === uris) sharedBatches.pollFirst()
+                        selectedSources = sources; active = false
+                        result.success(mapOf("files" to sources.map { it.second }, "pending" to sharedBatches.size))
+                    }
+                } catch(e: Exception) { runOnUiThread { active = false; result.error("SHARE", e.message, uris.isNotEmpty()) } }
+            }
             return
         }
+        if(call.method == "discardShare") { sharedBatches.pollFirst(); active = false; result.success(sharedBatches.size); return }
         if(call.method == "restoreTarget") {
             background(result) {
                 try {
