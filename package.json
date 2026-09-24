@@ -1,14 +1,15 @@
 {
   "name": "file-hero",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Portable SSD file manager with per-file readme metadata",
+  "description": "Portable SSD file manager shared by Android and Windows, with per-batch readme metadata",
   "main": "desktop/main.cjs",
   "scripts": {
     "build": "node scripts/build-native.cjs",
     "start": "npm run build && electron .",
     "test": "npm run build && node --test tests/*.test.cjs",
-    "dist": "npm run build && electron-builder --win portable"
+    "dist": "npm run build && electron scripts/render-icon.cjs && electron-builder --win nsis",
+    "smoke": "npm run build && electron scripts/smoke-desktop.cjs"
   },
   "build": {
     "appId": "com.filehero.desktop",
@@ -21,13 +22,26 @@
       {
         "from": "build/file-hero-core.exe",
         "to": "file-hero-core.exe"
+      },
+      {
+        "from": "build/file-hero-agent.exe",
+        "to": "file-hero-agent.exe"
       }
     ],
     "win": {
-      "target": "portable"
+      "target": "nsis",
+      "icon": "build/file-hero-icon.png"
     },
     "directories": {
       "output": "dist"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "include": "installer/installer.nsh",
+      "artifactName": "File-Hero-Setup-${version}.${ext}",
+      "shortcutName": "File Hero"
     }
   },
   "devDependencies": {

@@ -1,14 +1,90 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"><title>File Hero</title><link rel="stylesheet" href="style.css"></head>
 <body>
-<aside class="sidebar"><div class="brand"><span class="logo">F</span>file-hero<span class="dot">●</span></div><div class="eyebrow">YOUR PORTABLE WORKSPACE</div><button id="connect" class="connect">＋ 连接 SSD / 文件夹</button><div class="nav active">▦ &nbsp; 我的文件</div><div class="drive"><span class="drive-icon">▰</span><strong id="driveName">尚未连接设备</strong><small id="drivePath">随身携带，井井有条。</small><progress id="capacity" max="100" value="0"></progress><small id="capacityText">选择一个文件夹开始</small></div><div class="side-footer">本地文件 · 自己掌控<br><span>FILE HERO / v0.1</span></div></aside>
-<main><header><div><div class="eyebrow">SSD FILE MANAGER</div><h1>每份文件，都有故事。</h1><p>把文件和它的说明，一起随身带走。</p></div><span class="badge">● LOCAL FIRST</span></header>
-<section class="stats"><article><small>当前文件夹</small><strong id="count">—</strong><span>个文件</span></article><article><small>文件总大小</small><strong id="total">—</strong><span>当前目录</span></article><article><small>已有文件说明</small><strong id="documented">—</strong><span>file-readme.txt</span></article></section>
-<div class="toolbar"><h2>文件库</h2><div class="actions"><button id="index" disabled>生成 / 更新说明</button><button id="mkdir" disabled>＋ 文件夹</button><button id="import" class="primary" disabled>↑ 导入文件</button></div></div>
-<div class="browser"><div class="browser-top"><button id="up" disabled aria-label="返回上层">↑</button><span id="breadcrumb">我的 SSD</span><input id="search" placeholder="搜索当前文件夹…" aria-label="搜索文件"><button id="refresh" disabled aria-label="刷新">↻</button></div><table><thead><tr><th>名称</th><th>大小</th><th>修改日期</th><th>文件说明</th></tr></thead><tbody id="files"></tbody></table><div id="empty" class="empty"><div>▱</div><h3>你的随身文件库</h3><p>连接 portable SSD，开始整理文件与说明。<br>原有文件可通过「生成 / 更新说明」建立档案。</p></div></div>
-<div id="status" role="status" aria-live="polite">准备就绪</div></main>
-<section id="details" class="details" hidden><button id="close" aria-label="关闭详情">✕</button><div class="eyebrow">FILE DETAILS</div><h2 id="detailName"></h2><dl id="facts"></dl><label for="description">文件描述</label><textarea id="description" rows="5" placeholder="这个文件是什么？为什么保留它？"></textarea><small>描述保存为单行文本，最长 8192 UTF-8 字节。</small><button id="save" class="primary">保存说明</button><button id="export">↓ 导出文件副本</button><p class="note">本批所有文件的描述统一保存在<br>当前文件夹的 file-readme.txt。<br>每个批次只有一份说明文件。</p></section>
+<aside class="sidebar">
+  <div class="brand"><span class="logo">F</span>file-hero<span class="dot">●</span></div>
+  <div class="eyebrow">YOUR PORTABLE WORKSPACE</div>
+  <div class="drive">
+    <span class="drive-icon">▰</span><strong id="driveName">未检测到 SSD</strong><small id="drivePath">插入 SSD 后自动连接</small>
+    <progress id="capacity" max="100" value="0"></progress><small id="capacityText"></small>
+    <small id="fsWarning" class="warn" hidden></small>
+  </div>
+  <button id="switchDrive" class="quiet" disabled>切换 SSD / 位置</button>
+  <div class="settings">
+    <div class="eyebrow">电脑整合</div>
+    <label><input type="checkbox" id="autostart"> 插入 SSD 自动打开 File Hero</label>
+    <label><input type="checkbox" id="menu"> 右键菜单「Share to SSD」</label>
+    <small id="integrationNote"></small>
+  </div>
+  <div class="side-footer">本地文件 · 手机电脑通用<br><span>FILE HERO DESKTOP / v0.2</span></div>
+</aside>
+<main>
+  <header><div><div class="eyebrow">SSD FILE MANAGER</div><h1>每份文件，都有故事。</h1><p>拖入文件或文件夹，或在电脑右键「Share to SSD」，和手机一样按批次存入，并附上描述。</p></div><span class="badge">● LOCAL FIRST</span></header>
+  <section id="tray" class="tray" aria-label="待存入 SSD">
+    <div id="trayEmpty" class="tray-empty"><span>⇩</span>把文件或文件夹拖到这里，或在资源管理器右键「Share to SSD」</div>
+    <div id="trayFull" hidden>
+      <div class="tray-head">
+        <div><div class="eyebrow">待存入 SSD</div><strong id="shareCount"></strong></div>
+        <button id="shareClear" class="quiet">清空</button>
+      </div>
+      <div id="shareFiles" class="tray-items"></div>
+      <p id="shareWaiting" class="waiting" hidden>未检测到 SSD，存入已暂停。请插入 SSD，检测到后可以继续；文件不会存到电脑上。</p>
+      <div class="tray-foot">
+        <small id="folderHint" class="tray-hint" hidden>文件夹连同子文件夹一起复制，每一层都有自己的 file-readme.txt，手机上可以逐层浏览。</small>
+        <div class="tray-target">
+          <div class="modes" role="radiogroup" aria-label="存入位置">
+            <label><input type="radio" name="mode" value="new" checked> 新建文件夹</label>
+            <label><input type="radio" name="mode" value="existing"> 已有文件夹</label>
+            <label id="currentMode"><input type="radio" name="mode" value="current"> 当前文件夹</label>
+          </div>
+          <div id="newFields" class="fields"><input id="shareName" maxlength="120" placeholder="新文件夹名称" aria-label="新文件夹名称"><input id="shareDescription" placeholder="文件夹描述（可选）" aria-label="文件夹描述"></div>
+          <div id="existingFields" class="fields" hidden><select id="shareFolder" aria-label="已有文件夹"></select><input id="shareFileDescription" placeholder="这些文件的描述（可选）" aria-label="这些文件的描述"></div>
+          <div id="currentFields" class="fields" hidden><span id="currentName" class="current-name"></span><input id="shareCurrentDescription" placeholder="这些文件的描述（可选）" aria-label="这些文件的描述"></div>
+          <p id="shareTarget" class="target"></p>
+          <progress id="shareProgress" max="100" value="0" hidden></progress><small id="shareProgressText"></small>
+          <p id="shareError" class="error" role="alert"></p>
+          <div class="actions"><button id="shareSave" class="primary">复制到 SSD</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="welcome" class="welcome">
+    <div class="welcome-icon">▰</div>
+    <h2>请插入 SSD</h2>
+    <p>插入 SSD 后会自动连接。已在手机上使用过 File Hero 的 SSD（根目录有 file-hero 文件夹）会被直接识别。</p>
+    <div id="driveList" class="drive-list"></div>
+    <button id="pickFolder" class="quiet">选择其他位置…</button>
+  </section>
+  <section id="library" hidden>
+    <div class="toolbar">
+      <button id="up" aria-label="返回上层" title="返回上层">↑</button>
+      <span id="breadcrumb" class="crumb">file-hero</span>
+      <input id="search" placeholder="搜索当前文件夹…" aria-label="搜索文件">
+      <button id="refresh" aria-label="刷新" title="刷新">↻</button>
+    </div>
+    <div class="toolbar">
+      <span id="summary" class="summary"></span>
+      <div class="actions"><button id="index" title="为 SSD 上已有的文件重新生成 file-readme.txt 清单">更新说明</button><button id="mkdir">＋ 文件夹</button><button id="import" class="primary">↑ 从电脑存入</button></div>
+    </div>
+    <div id="files" class="cards"></div>
+    <div id="empty" class="empty" hidden><div>▱</div><h3>这个文件夹还是空的</h3><p>在电脑上选中文件 → 右键 →「Share to SSD」，或点击「从电脑存入」。</p></div>
+  </section>
+  <div id="status" role="status" aria-live="polite">准备就绪</div>
+</main>
+<section id="details" class="details" hidden>
+  <button id="close" class="close" aria-label="关闭详情">✕</button>
+  <div class="eyebrow" id="detailKind">FILE DETAILS</div>
+  <div id="detailCover" class="cover large"></div>
+  <h2 id="detailName"></h2>
+  <dl id="facts"></dl>
+  <label for="description" id="descriptionLabel">文件描述</label>
+  <textarea id="description" rows="5" placeholder="这个文件是什么？为什么保留它？"></textarea>
+  <small>描述保存为单行文本，最长 8192 UTF-8 字节。</small>
+  <button id="save" class="primary">保存说明</button>
+  <div class="detail-actions"><button id="open">打开</button><button id="reveal">在资源管理器中显示</button><button id="export">导出副本</button><button id="delete" class="danger">删除</button></div>
+  <p class="note">本批所有文件的描述统一保存在当前文件夹的 file-readme.txt，手机和电脑共用。</p>
+</section>
 <dialog id="folderDialog"><form method="dialog"><h2>新建文件夹</h2><input id="folderName" required placeholder="文件夹名称" maxlength="120"><div class="actions"><button value="cancel" formnovalidate>取消</button><button value="create" class="primary">创建</button></div></form></dialog>
-<dialog id="batchDialog"><form method="dialog"><div class="eyebrow">NEW IMPORT BATCH</div><h2>建立一个存入批次</h2><p>本批文件将放入独立文件夹，附带 file-readme.txt。</p><label for="batchName">批次文件夹名称</label><input id="batchName" required maxlength="120"><label for="batchDescription">这批文件的描述</label><textarea id="batchDescription" rows="3" placeholder="例如：2026 年日本旅行原始照片"></textarea><div class="actions"><button value="cancel" formnovalidate>取消</button><button value="import" class="primary">选择文件并存入</button></div></form></dialog>
+<dialog id="confirmDialog"><form method="dialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><div class="actions"><button value="cancel">取消</button><button value="ok" class="danger-fill">永久删除</button></div></form></dialog>
+<div id="dropOverlay" class="drop-overlay" hidden><div><span>⇩</span>放开，加入待存入区</div></div>
 <script src="renderer.js"></script></body></html>
-

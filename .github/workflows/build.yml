@@ -38,8 +38,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
-          name: file-hero-windows-portable
-          path: dist/*.exe
+          name: file-hero-windows-setup
+          path: dist/File-Hero-Setup-*.exe
   android:
     runs-on: ubuntu-latest
     steps:

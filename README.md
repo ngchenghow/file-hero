@@ -1,6 +1,6 @@
 # file-hero
 
-Portable SSD 文件管理器，Android 使用 **Flutter + Kotlin SAF**，桌面使用 **Electron + C++17**。目前优先提供 Android 测试 APK。
+Portable SSD 文件管理器，Android 使用 **Flutter + Kotlin SAF**，桌面使用 **Electron + C++17**。手机和电脑读写同一个 SSD 上的 `file-hero` 文件夹和同一种 `file-readme.txt` 格式，双方存入的文件都可以在另一方浏览、打开和编辑说明。
 
 ## 按批次存入，一个说明文件
 
@@ -43,6 +43,23 @@ Size-Bytes: 3145728
 
 日期统一 UTC。历史文件无法推断上次存入日期，会记录 `unknown`；通过应用存入的文件记录实际存入时间。文件大小是字节容量，不是磁盘实际占用空间。批次总容量不包含说明文件本身。
 
+## Windows 桌面版 v0.2
+
+安装 `File-Hero-Setup-0.2.0.exe`（当前用户安装，不需要管理员权限）。首次启动后：
+
+- **插入 SSD 自动打开**：登录 Windows 时启动一个很小的后台程序 `file-hero-agent.exe`（C++，无窗口）。插入根目录有 `file-hero` 文件夹的 SSD（手机版授权过、或桌面版启用过的 SSD）时，自动打开 File Hero 并连接该 SSD。其他 U 盘不会触发。
+- **拖拽存入**：把文件或文件夹从资源管理器拖到 File Hero 窗口任意位置。界面中间的圆角「待存入 SSD」区显示拖入的项目（图片有缩略图，可逐个 ✕ 移出或「清空」），可以多次拖入累加。右下角选择存入位置：
+  - 「新建文件夹」：填写名称和描述，建在 SSD 的 `file-hero` 下；
+  - 「已有文件夹」：从列表选择，可填写这些文件的描述，保留文件夹原有描述；
+  - 「当前文件夹」：存入下方正在浏览的文件夹（在某个文件夹内拖入时默认选中）。
+  然后点「复制到 SSD」，显示复制进度，完成后打开目标文件夹。「从电脑存入」按钮选择的文件也会进入这个区域。
+- **右键「Share to SSD」**：在资源管理器选中一个或多个文件或文件夹 → 右键 →「Share to SSD」（Windows 11 在「显示更多选项」中，或按住 Shift 再右键直接显示）。选中的项目一次性进入同一个待存入区。未插 SSD 时会等待，插入后可继续，不会存到电脑上。
+- 文件夹连同子文件夹一起复制，每一层都有自己的 `file-readme.txt`；只存入一个文件夹并新建时，名称默认为原文件夹名，它本身就是新建的文件夹。原文件夹里已有 File Hero 说明时保留其中的描述。
+- **浏览方式与手机相同**：`file-hero` 下的批次文件夹以卡片显示，左侧封面（图片、视频、PDF 缩略图），右侧批次描述、文件数量、总容量和日期。点击文件夹进入；点击文件编辑描述，「打开」用电脑默认程序打开，另可在资源管理器中显示、导出副本、删除（需确认）。
+- 左侧「电脑整合」可关闭自动打开或右键菜单；卸载时一并移除。
+
+文件名按与 Android 相同的规则整理为手机和电脑都能用的名称；同一批重名文件改为 `name (2).ext`；已有文件夹中存在同名文件时整批拒绝，不会覆盖。大文件复制显示进度。SSD 为 NTFS 时会提示：多数手机无法写入 NTFS，建议使用 **exFAT**。手机拍摄的 HEIC 照片或 HEVC 视频在 Windows 上可能需要从 Microsoft Store 安装 HEIF / HEVC 扩展才能打开。
+
 ## Android 测试
 
 v0.1.3 支持相册/文件管理器的系统分享：选中一个或多个文件 → 分享 → File Hero。新建模式选择 SSD 存放位置，填写名称、描述后点「存入」；已有模式选择具体文件夹直接追加，保留原描述。新建模式可复用上次授权位置。App 未启动或已经打开时都支持接收文件分享；普通文字/网址分享不会当作文件写入。App 使用专用 File Hero 图标。
@@ -77,18 +94,21 @@ Windows 需要 Node.js 22+ 和 MinGW g++（默认 `C:/msys64/mingw64/bin/g++.exe
 
 ```sh
 npm ci
-npm test
+npm test        # C++ 引擎测试
+npm run smoke   # 驱动真实 Electron 界面：分享 → 连接 → 新建/已有文件夹存入 → 编辑 → 导出 → 删除
 npm start
-npm run dist
+npm run dist    # 生成 dist/File-Hero-Setup-<版本>.exe
 ```
+
+右键菜单和自动启动只由安装版注册（`npm start` 开发模式不会修改注册表）。
 
 Windows CI 可手动运行「Build and test」，选择 `all`。桌面和 Android 共用相同的批次文本格式。跨设备移动时复制整个批次文件夹即可。
 
 ## 当前范围
 
-第一版提供浏览、按批次导入、导出副本、新建目录、统一说明编辑。桌面暂不提供删除；尚不提供移动、重命名、跨设备联网同步、自动监听和断点续传。外部更名后使用「更新说明」刷新清单；旧文件名对应的描述不会自动匹配到新文件名。请勿多个程序同时写同一批次。所有内容本地保存。
+提供浏览、按批次存入、导出副本、新建目录、删除、统一说明编辑。尚不提供移动、重命名、跨设备联网同步和断点续传。外部更名后使用「更新说明」刷新清单；旧文件名对应的描述不会自动匹配到新文件名。请勿多个程序同时写同一批次。所有内容本地保存。
 
-结构：`native/` C++ 引擎；`desktop/` Electron；`mobile/` Flutter 与 Kotlin；`scripts/` 构建；`tests/` 引擎测试。
+结构：`native/` C++ 引擎（`main.cpp`）与 Windows 后台程序（`agent.cpp`）；`installer/` NSIS 卸载清理；`desktop/` Electron；`mobile/` Flutter 与 Kotlin；`scripts/` 构建；`tests/` 引擎测试。
 
 实现参考：[Android SAF](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter 平台通道](https://docs.flutter.dev/platform-integration/platform-channels)、[Electron 安全说明](https://www.electronjs.org/docs/latest/tutorial/security)。
 
