@@ -27,6 +27,8 @@ import java.util.TimeZone
 import java.util.concurrent.Executors
 import java.io.ByteArrayOutputStream
 
+private const val APP_FOLDER = "file-hero"
+
 class MainActivity : FlutterActivity() {
     private var root: DocumentFile? = null
     private val worker = Executors.newSingleThreadExecutor()
@@ -160,12 +162,30 @@ class MainActivity : FlutterActivity() {
         val volume = volumeOf(tree) ?: return false
         return volume != "PRIMARY" && removableVolumes()?.contains(volume) ?: true
     }
+    // The SSD is authorized at its root (or at <root>/file-hero when the system refuses the root); all data lives in <SSD>/file-hero.
+    private fun treePath(tree: Uri): String? = try { DocumentsContract.getTreeDocumentId(tree).substringAfter(':', "") } catch(_: Exception) { null }
+    private fun isAppTree(tree: Uri): Boolean = treePath(tree)?.let { it.isEmpty() || it.equals(APP_FOLDER, true) } == true
+    private fun appFolder(tree: Uri, create: Boolean): DocumentFile? {
+        val dir = DocumentFile.fromTreeUri(this, tree) ?: return null
+        if(!dir.canRead() || !dir.canWrite()) return null
+        if(treePath(tree)?.isNotEmpty() == true) return dir
+        val existing = dir.listFiles().firstOrNull { it.name.equals(APP_FOLDER, true) }
+        if(existing != null) { require(existing.isDirectory) { "SSD 根目录已有名为 file-hero 的文件，请改名或移走后再授权" }; return existing }
+        return if(create) dir.createDirectory(APP_FOLDER) ?: error("无法在 SSD 根目录建立 file-hero 文件夹") else null
+    }
+    private fun appLabel(tree: Uri): String = if(treePath(tree).isNullOrEmpty()) "${DocumentFile.fromTreeUri(this, tree)?.name ?: "SSD"} / $APP_FOLDER" else APP_FOLDER
+    // Opens the picker on the SSD root (or on file-hero when choosing an existing folder).
+    private fun pickerStart(existing: Boolean): Uri? {
+        val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)?.let { volumeOf(Uri.parse(it)) }?.takeIf { it != "PRIMARY" }
+        val volume = (if(existing) saved else null) ?: removableVolumes()?.firstOrNull() ?: saved ?: return null
+        return DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", if(existing) "$volume:$APP_FOLDER" else "$volume:")
+    }
     private fun ssdStatus(): Map<String,Any> {
         val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)?.let { Uri.parse(it) }
         val volumes = removableVolumes()
         if(saved != null && onSsd(saved)) {
             val tree = try { DocumentFile.fromTreeUri(this, saved) } catch(_: Exception) { null }
-            if(tree != null && tree.canRead() && tree.canWrite()) return mapOf("state" to "ready", "name" to (tree.name ?: "SSD"))
+            if(isAppTree(saved) && tree != null && tree.canRead() && tree.canWrite()) return mapOf("state" to "ready", "name" to appLabel(saved))
             return mapOf("state" to "unauthorized", "name" to "", "other" to true)
         }
         // A saved SSD whose volume is gone, or no removable volume at all, means the drive is not plugged in.
@@ -216,9 +236,9 @@ class MainActivity : FlutterActivity() {
         if(call.method == "restoreTarget") {
             background(result) {
                 try {
-                    val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)
-                    val candidate = saved?.let { Uri.parse(it) }?.takeIf { onSsd(it) }?.let { DocumentFile.fromTreeUri(this, it) }
-                    if(candidate != null && candidate.canRead() && candidate.canWrite()) { root = candidate; candidate.name ?: "SSD" } else null
+                    val saved = getPreferences(MODE_PRIVATE).getString("ssdRoot", null)?.let { Uri.parse(it) }?.takeIf { onSsd(it) && isAppTree(it) }
+                    val folder = saved?.let { appFolder(it, true) }
+                    if(saved != null && folder != null) { root = folder; appLabel(saved) } else null
                 } catch(_: Exception) { root = null; null }
             }
             return
@@ -243,6 +263,7 @@ class MainActivity : FlutterActivity() {
                 selectingExisting = call.argument<Boolean>("existing") ?: false
                 val intent = when(call.method) {
                     "connect" -> Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                        .also { intent -> if(Build.VERSION.SDK_INT >= 26) pickerStart(selectingExisting)?.let { intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) } }
                     "pickFiles" -> { selectedSources = emptyList(); Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
                     else -> { require(root != null) { "请先连接 SSD" }; Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, path.substringAfterLast('/')) }
                 }
@@ -284,12 +305,17 @@ class MainActivity : FlutterActivity() {
             when(kind) {
                 "connect" -> {
                     require(onSsd(uri)) { "所选位置不在 USB SSD 上。请在选择器左侧菜单中点选 SSD，再选择文件夹。" }
+                    require(selectingExisting || isAppTree(uri)) { "请停在 SSD 的最上层（根目录），不要进入任何文件夹，再点「使用此文件夹」。\n\n如果系统不允许选择根目录，可以先在 SSD 根目录新建名为 file-hero 的文件夹，再选择它。" }
                     val flags = (data?.flags ?: 0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     contentResolver.takePersistableUriPermission(uri, flags)
                     val selected = DocumentFile.fromTreeUri(this, uri) ?: error("无法连接文件夹")
-                    require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }; root = selected
-                    if(!selectingExisting) getPreferences(MODE_PRIVATE).edit().putString("ssdRoot", uri.toString()).apply()
-                    selected.name ?: "USB SSD"
+                    require(selected.canRead() && selected.canWrite()) { "请选择可读写的 SSD 文件夹" }
+                    if(selectingExisting) { root = selected; selected.name ?: "USB SSD" }
+                    else {
+                        root = appFolder(uri, true)
+                        getPreferences(MODE_PRIVATE).edit().putString("ssdRoot", uri.toString()).apply()
+                        appLabel(uri)
+                    }
                 }
                 "pickFiles" -> {
                     val sources = sourceFiles(picked)

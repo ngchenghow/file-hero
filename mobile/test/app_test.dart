@@ -83,6 +83,8 @@ void main() {
     await advance(tester);
     expect(find.text('选择存放位置'), findsNothing);
     await tester.tap(find.text('存入')); await advance(tester);
+    expect(find.text('授权 SSD'), findsOneWidget);
+    await tester.tap(find.text('开始授权')); await advance(tester);
     expect(calls.where((c) => c.method == 'connect').length, 1);
     await tester.tap(find.text('取消')); await advance(tester);
     expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
@@ -206,6 +208,27 @@ void main() {
     await tester.tap(find.text('重新选择')); await advance(tester);
     expect(find.text('分享文件存入 SSD'), findsOneWidget);
     expect(calls.where((c) => c.method == 'importSelected'), isEmpty);
+  });
+  testWidgets('first authorization explains root selection and file-hero folder', (tester) async {
+    shared = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.textContaining('file-hero 文件夹中'), findsOneWidget);
+    await tester.tap(find.text('存入')); await advance(tester);
+    expect(find.textContaining('停在 SSD 最上层（根目录）'), findsOneWidget);
+    expect(find.textContaining('自动在 SSD 根目录建立 file-hero 文件夹'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'connect'), isEmpty);
+    await tester.tap(find.text('开始授权')); await advance(tester);
+    final data = calls.singleWhere((c) => c.method == 'connect').arguments;
+    expect(data['existing'], false);
+    expect(calls.where((c) => c.method == 'importSelected').length, 1);
+  });
+  testWidgets('cancelling the authorization explanation never opens the picker', (tester) async {
+    shared = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('存入')); await advance(tester);
+    await tester.tap(find.text('取消').last); await advance(tester);
+    expect(calls.where((c) => c.method == 'connect'), isEmpty);
+    expect(find.text('分享文件存入 SSD'), findsOneWidget);
   });
   testWidgets('folder can be sent over Bluetooth', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);

@@ -108,6 +108,15 @@ class _FilesPageState extends State<FilesPage> {
     }
   }
   Future<String?> authorize(bool existing) async {
+    if(!existing) {
+      // SSD authorization goes through the system picker; explain exactly what to tap before opening it.
+      final start = await showDialog<bool>(context: context, barrierDismissible: false, builder: (context) => AlertDialog(
+        title: const Text('授权 SSD'),
+        content: const Text('第一次使用需要授权 File Hero 访问 SSD。接下来会打开系统的文件夹选择界面：\n\n1. 确认界面显示的是你的 SSD；如果不是，点左上角 ☰ 菜单选择 SSD\n2. 停在 SSD 最上层（根目录），不要进入任何文件夹\n3. 点底部「使用此文件夹」，再点「允许」\n\nFile Hero 会自动在 SSD 根目录建立 file-hero 文件夹，所有文件都存放在里面。'),
+        actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('开始授权'))],
+      ));
+      if(!mounted || start != true) return null;
+    }
     try { return await call('connect', {'existing': existing}) as String?; }
     on PlatformException catch(e) {
       if(mounted) { await showDialog<void>(context: context, builder: (context) => AlertDialog(title: const Text('无法使用所选位置'), content: Text(e.message ?? '请选择 USB SSD 上的文件夹'), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('重新选择'))])); }
@@ -326,7 +335,7 @@ class _ShareSaveDialogState extends State<_ShareSaveDialog> {
       const SizedBox(height: 12),
       Wrap(spacing: 8, children: [ChoiceChip(label: const Text('新建文件夹'), selected: mode == 'new', onSelected: (_) => selectMode('new')), ChoiceChip(label: const Text('已有文件夹'), selected: mode == 'existing', onSelected: (_) => selectMode('existing'))]),
       const SizedBox(height: 12),
-      Text(mode == 'new' ? '新文件夹将直接建立在 SSD 根目录。首次存入时需授权根目录。' : !existingReady ? '请选择要存入的已有文件夹' : '目标：${widget.target}'),
+      Text(mode == 'new' ? '新文件夹将建立在 SSD 的 file-hero 文件夹中。首次存入时需授权 SSD 根目录，file-hero 文件夹会自动建立。' : !existingReady ? '请选择要存入的已有文件夹' : '目标：${widget.target}'),
       if(mode == 'existing') TextButton.icon(onPressed: () => finish('target'), icon: const Icon(Icons.folder_open), label: const Text('选择已有文件夹')),
       if(mode == 'new') ...[
         TextFormField(key: const ValueKey('share-name'), controller: name, decoration: const InputDecoration(labelText: '文件夹名称'), validator: (value) => value == null || value.trim().isEmpty ? '请输入文件夹名称' : null), const SizedBox(height: 12),
