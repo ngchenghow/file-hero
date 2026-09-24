@@ -274,7 +274,9 @@ $('refresh').onclick = () => task(async () => { await reload(); status('已刷�
 $('up').onclick = () => enter(folder.split('/').slice(0, -1).join('/'));
 $('import').onclick = () => task(async () => { status(await hero.invoke('pick-files') ? '已加入待存入区' : '已取消选择'); });
 $('index').onclick = () => task(async () => { const r = await hero.invoke('index', folder); await reload(); status(`已将 ${r.indexed} 个文件的信息更新到各文件夹的 file-readme.txt`); });
-$('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').showModal(); };
+$('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').returnValue = ''; $('folderDialog').showModal(); };
+// Cancel is not a submit button, so Enter in the name field creates the folder.
+$('folderCancel').onclick = () => $('folderDialog').close('cancel');
 $('folderDialog').addEventListener('close', () => { if ($('folderDialog').returnValue === 'create') task(async () => { await hero.invoke('mkdir', folder, $('folderName').value.trim()); await reload(); status('文件夹已创建'); }); });
 $('close').onclick = () => { $('details').hidden = true; };
 $('save').onclick = () => task(async () => { const file = selected; const desc = $('description').value.replace(/[\r\n]+/g, ' '); await hero.invoke('describe', pathOf(file), desc); await reload(); details((results || entries).find(e => pathOf(e) === pathOf(file)) || file); status('说明已保存到 SSD'); });

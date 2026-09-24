@@ -104,6 +104,16 @@ app.whenReady().then(async () => {
     assert.equal(await js("document.getElementById('search').value"), '');
     await js("document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero / 东京旅行 / 相册'", 'up 1'); await idle();
     await js("document.getElementById('up').click()"); await until("document.getElementById('breadcrumb').textContent === 'file-hero / 东京旅行'", 'up 2'); await idle();
+
+    // New folder: typing a name and pressing Enter creates it (the same as clicking 创建).
+    await js("document.getElementById('mkdir').click(); document.getElementById('folderName').focus()");
+    window.webContents.insertText('收据');
+    for (const type of ['keyDown', 'char', 'keyUp']) window.webContents.sendInputEvent({ type, keyCode: type === 'char' ? String.fromCharCode(13) : 'Enter' });
+    await until("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent === '收据')", 'folder created with Enter');
+    assert.ok(fs.statSync(path.join(hero, '东京旅行', '收据')).isDirectory());
+    await js("document.getElementById('mkdir').click(); document.getElementById('folderName').value = '合同'; document.querySelector('#folderDialog button.primary').click()");
+    await until("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent === '合同')", 'folder created with button');
+    await idle();
     await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click(); document.getElementById('export').click()");
     await delay(300); await idle();
     assert.equal(fs.readFileSync(path.join(base, 'exported.txt'), 'utf8'), 'Imported notes');
@@ -120,7 +130,7 @@ app.whenReady().then(async () => {
     await until(`${tray}.includes('extra.txt')`, 'staged for screenshot');
     await delay(500);
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'), screenshot.toPNG());
-    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, export, delete; screenshot saved.');
+    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, delete; screenshot saved.');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });
