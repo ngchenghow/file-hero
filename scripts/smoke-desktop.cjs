@@ -107,8 +107,11 @@ app.whenReady().then(async () => {
 
     // New folder: typing a name and pressing Enter creates it (the same as clicking 创建).
     await js("document.getElementById('mkdir').click(); document.getElementById('folderName').focus()");
-    window.webContents.insertText('收据');
-    for (const type of ['keyDown', 'char', 'keyUp']) window.webContents.sendInputEvent({ type, keyCode: type === 'char' ? String.fromCharCode(13) : 'Enter' });
+    const enter = async text => { // the typed text must land before Enter, or Enter is lost
+      window.webContents.insertText(text); await until(`document.activeElement.value.includes(${JSON.stringify(text)})`, 'typed');
+      for (const type of ['keyDown', 'char', 'keyUp']) window.webContents.sendInputEvent({ type, keyCode: type === 'char' ? String.fromCharCode(13) : 'Enter' });
+    };
+    await enter('收据');
     await until("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent === '收据')", 'folder created with Enter');
     assert.ok(fs.statSync(path.join(hero, '东京旅行', '收据')).isDirectory());
     await js("document.getElementById('mkdir').click(); document.getElementById('folderName').value = '合同'; document.querySelector('#folderDialog button.primary').click()");
@@ -117,6 +120,25 @@ app.whenReady().then(async () => {
     await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click(); document.getElementById('export').click()");
     await delay(300); await idle();
     assert.equal(fs.readFileSync(path.join(base, 'exported.txt'), 'utf8'), 'Imported notes');
+
+    // Rename from the details panel: the extension is not selected, and the description follows the file.
+    await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click(); document.getElementById('rename').click()");
+    assert.equal(await js("(() => { const i = document.getElementById('renameName'); return i.value.slice(i.selectionStart, i.selectionEnd); })()"), 'notes');
+    await enter('会议笔记');
+    await until("document.getElementById('detailName').textContent === '会议笔记.txt' && !document.getElementById('details').hidden", 'renamed file reopened');
+    await idle();
+    assert.ok(fs.existsSync(path.join(hero, '东京旅行', '会议笔记.txt'))); assert.equal(fs.existsSync(path.join(hero, '东京旅行', 'notes.txt')), false);
+    assert.match(fs.readFileSync(path.join(hero, '东京旅行', 'file-readme.txt'), 'utf8'), /\[File: 会议笔记\.txt\][^[]*Description: 重要的项目说明，已核对/);
+    assert.equal(await js("document.getElementById('description').value"), '重要的项目说明，已核对');
+    await js("document.getElementById('rename').click(); document.getElementById('renameName').value = 'notes.txt'; document.querySelector('#renameDialog button.primary').click()");
+    await until("document.getElementById('detailName').textContent === 'notes.txt'", 'renamed back'); await idle();
+    // Folder cards have their own rename button.
+    await js("document.getElementById('details').hidden = true; [...document.querySelectorAll('#files .card')].find(c => c.querySelector('strong').textContent === '合同').querySelector('[title^=重命名文件夹]').click()");
+    assert.equal(await js("document.getElementById('renameTitle').textContent"), '重命名文件夹');
+    await js("document.getElementById('renameName').value = '合同文件'; document.querySelector('#renameDialog button.primary').click()");
+    await until("[...document.querySelectorAll('#files .card strong')].some(s => s.textContent === '合同文件')", 'folder renamed'); await idle();
+    assert.ok(fs.statSync(path.join(hero, '东京旅行', '合同文件')).isDirectory());
+    await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click()");
 
     // The details panel closes on a click anywhere outside it, and on Esc.
     const clickAt = async selector => {
@@ -143,7 +165,7 @@ app.whenReady().then(async () => {
     await until(`${tray}.includes('extra.txt')`, 'staged for screenshot');
     await delay(500);
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'), screenshot.toPNG());
-    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, close details, delete; screenshot saved.');
+    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, rename, close details, delete; screenshot saved.');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

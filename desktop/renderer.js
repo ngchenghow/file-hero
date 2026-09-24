@@ -11,7 +11,7 @@ const previewable = name => /\.(jpe?g|png|gif|webp|bmp|heic|heif|mp4|mov|m4v|3gp
 const day = text => (text || 'unknown').split('T')[0];
 function status(message) { $('status').textContent = message; }
 function controls() {
-  for (const id of ['index','mkdir','import','refresh','save','open','reveal','export','delete']) $(id).disabled = working || !connected;
+  for (const id of ['index','mkdir','import','refresh','save','open','rename','reveal','export','delete']) $(id).disabled = working || !connected;
   $('switchDrive').disabled = working || !connected; $('up').disabled = working || !folder;
 }
 async function task(fn, doing = '正在处理，请勿拔出 SSD…') {
@@ -121,6 +121,10 @@ function render() {
       const exp = document.createElement('button'); exp.textContent = '导出'; exp.title = `导出文件夹 ${entry.name}（包括子文件夹）`;
       exp.onclick = event => { event.stopPropagation(); exportFolder(entry); }; actions.append(exp);
     }
+    if (entry.directory) {
+      const ren = document.createElement('button'); ren.textContent = '重命名'; ren.title = `重命名文件夹 ${entry.name}`;
+      ren.onclick = event => { event.stopPropagation(); renameEntry(entry); }; actions.append(ren);
+    }
     const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '删除'; remove.title = `删除 ${entry.name}`;
     remove.onclick = event => { event.stopPropagation(); removeEntry(entry); }; actions.append(remove);
     card.append(cover(entry), body, actions);
@@ -136,7 +140,7 @@ function exportFolder(entry) { task(async () => { const r = await hero.invoke('e
 function openFile(entry) { hero.invoke('open', pathOf(entry)).then(() => status(`已用默认程序打开「${entry.name}」`), error => status(`操作未完成：${error.message}`)); }
 function details(entry) {
   selected = entry; $('details').hidden = false; $('detailName').textContent = entry.name;
-  const readme = isReadme(entry.name);
+  const readme = isReadme(entry.name); $('rename').hidden = readme;
   $('detailKind').textContent = readme ? 'BATCH DESCRIPTION' : 'FILE DETAILS';
   $('descriptionLabel').textContent = readme ? '批次描述（文件夹卡片上显示）' : '文件描述';
   $('description').value = entry.metadata.Description || ''; $('facts').replaceChildren();
@@ -159,6 +163,30 @@ async function removeEntry(entry) {
   if (!await confirm(entry.directory ? '删除文件夹？' : '删除文件？', text)) { status('已取消删除'); return; }
   task(async () => { const r = await hero.invoke('delete', pathOf(entry)); await reload(); status(`已删除「${entry.name}」。${r.warning || ''}`); });
 }
+
+// The new name is typed without the extension selected, so the file type is kept unless it is changed on purpose.
+let renaming = null;
+function renameEntry(entry) {
+  if (working || isReadme(entry.name)) return;
+  renaming = entry;
+  $('renameTitle').textContent = entry.directory ? '重命名文件夹' : '重命名文件';
+  $('renameNote').textContent = entry.directory ? '文件夹内的文件和说明不受影响。' : '文件描述会跟着新名称一起保留。';
+  $('renameName').value = entry.name; $('renameDialog').returnValue = ''; $('renameDialog').showModal();
+  const dot = entry.directory ? -1 : entry.name.lastIndexOf('.');
+  $('renameName').setSelectionRange(0, dot > 0 ? dot : entry.name.length);
+}
+$('renameCancel').onclick = () => $('renameDialog').close('cancel');
+$('renameDialog').addEventListener('close', () => {
+  const entry = renaming, name = $('renameName').value.trim(); renaming = null;
+  if ($('renameDialog').returnValue !== 'rename' || !entry || !name || name === entry.name) return;
+  task(async () => {
+    const r = await hero.invoke('rename', pathOf(entry), name);
+    const moved = pathOf(entry).split('/').slice(0, -1).concat(r.name).join('/'), reopen = !entry.directory && !$('details').hidden;
+    await reload();
+    if (reopen) { const next = (results || entries).find(e => pathOf(e) === moved); if (next) details(next); }
+    status(`已重命名为「${r.name}」。${r.warning || ''}`);
+  });
+});
 
 // Staging area: dropped items, the file picker and Explorer's "Share to SSD" all land here; main keeps the list.
 function localName() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `分享-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`; }
@@ -289,6 +317,7 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape' && !d
 $('save').onclick = () => task(async () => { const file = selected; const desc = $('description').value.replace(/[\r\n]+/g, ' '); await hero.invoke('describe', pathOf(file), desc); await reload(); details((results || entries).find(e => pathOf(e) === pathOf(file)) || file); status('说明已保存到 SSD'); });
 $('open').onclick = () => openFile(selected);
 $('reveal').onclick = () => hero.invoke('reveal', pathOf(selected));
+$('rename').onclick = () => renameEntry(selected);
 $('export').onclick = () => task(async () => { const r = await hero.invoke('export', pathOf(selected)); status(r ? '文件副本已导出（说明仍保留在 SSD）' : '已取消导出'); });
 $('delete').onclick = () => removeEntry(selected);
 $('switchDrive').onclick = () => task(async () => { await hero.invoke('disconnect'); setDisconnected('请选择 SSD'); renderDrives(await hero.invoke('drives')); });

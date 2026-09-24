@@ -115,6 +115,21 @@ test('search walks every subfolder and matches file and folder descriptions', t 
   assert.deepEqual(run(root,'search','旅行/第二天','京都').entries,[]);
   assert.throws(()=>run(root,'search','',' '));
 });
+test('rename moves the description with the file and never overwrites', t => {
+  const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'a'); fs.writeFileSync(b,'bb');
+  run(root,'batch','',['旅行','京都',a,b]); run(root,'describe','旅行/a.txt','第一天的票');
+  assert.equal(run(root,'rename','旅行/a.txt','车票.txt').name,'车票.txt');
+  const list=run(root,'list','旅行').entries; assert.equal(list.some(e=>e.name==='a.txt'),false);
+  const moved=list.find(e=>e.name==='车票.txt'); assert.equal(moved.metadata.Description,'第一天的票'); assert.equal(moved.metadata.Name,'车票.txt');
+  let manifest=fs.readFileSync(path.join(root,'旅行','file-readme.txt'),'utf8'); assert.match(manifest,/\[File: 车票.txt\]/); assert.doesNotMatch(manifest,/\[File: a.txt\]/); assert.match(manifest,/File-Count: 2/);
+  assert.throws(()=>run(root,'rename','旅行/车票.txt','b.txt'),/同名/); assert.equal(fs.readFileSync(path.join(root,'旅行','b.txt'),'utf8'),'bb');
+  for(const bad of ['file-readme.txt','a/b.txt','x:y','CON','']) assert.throws(()=>run(root,'rename','旅行/车票.txt',bad));
+  assert.throws(()=>run(root,'rename','旅行/file-readme.txt','x.txt'));
+  run(root,'rename','旅行/b.txt','B.txt'); assert.ok(run(root,'list','旅行').entries.some(e=>e.name==='B.txt'&&e.metadata.Name==='B.txt'));
+  run(root,'rename','旅行','京都之旅'); manifest=fs.readFileSync(path.join(root,'京都之旅','file-readme.txt'),'utf8');
+  assert.match(manifest,/Batch: 京都之旅/); assert.equal(run(root,'list').entries[0].metadata.Description,'京都');
+  assert.throws(()=>run(root,'rename','','x'));
+});
 test('delete removes files from the manifest, removes folders, and never removes the root', t => {
   const {base,root}=fixture(t); const a=path.join(base,'a.txt'), b=path.join(base,'b.txt'); fs.writeFileSync(a,'abc'); fs.writeFileSync(b,'12345');
   run(root,'batch','',['批次','desc',a,b]);

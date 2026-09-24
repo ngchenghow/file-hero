@@ -227,7 +227,7 @@ else {
           return result.canceled ? null : await inRoot('export', relative, result.filePath);
         }
         if (action === 'delete') return await inRoot('delete', relative);
-        if (['index', 'mkdir', 'describe'].includes(action)) return await inRoot(action, relative, ...(action === 'index' ? [] : [value]));
+        if (['index', 'mkdir', 'describe', 'rename'].includes(action)) return await inRoot(action, relative, ...(action === 'index' ? [] : [value]));
         throw new Error('Unknown action');
       } finally { busy = false; }
     });

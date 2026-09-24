@@ -81,10 +81,11 @@
   <textarea id="description" rows="5" placeholder="这个文件是什么？为什么保留它？"></textarea>
   <small>描述保存为单行文本，最长 8192 UTF-8 字节。</small>
   <button id="save" class="primary">保存说明</button>
-  <div class="detail-actions"><button id="open">打开</button><button id="reveal">在资源管理器中显示</button><button id="export">导出副本</button><button id="delete" class="danger">删除</button></div>
+  <div class="detail-actions"><button id="open">打开</button><button id="rename">重命名</button><button id="reveal">在资源管理器中显示</button><button id="export">导出副本</button><button id="delete" class="danger">删除</button></div>
   <p class="note">本批所有文件的描述统一保存在当前文件夹的 file-readme.txt，手机和电脑共用。</p>
 </section>
 <dialog id="folderDialog"><form method="dialog"><h2>新建文件夹</h2><input id="folderName" required placeholder="文件夹名称" maxlength="120"><div class="actions"><button type="button" id="folderCancel">取消</button><button value="create" class="primary">创建</button></div></form></dialog>
+<dialog id="renameDialog"><form method="dialog"><h2 id="renameTitle">重命名</h2><input id="renameName" required placeholder="新名称" maxlength="120" aria-label="新名称"><p id="renameNote" class="muted"></p><div class="actions"><button type="button" id="renameCancel">取消</button><button value="rename" class="primary">重命名</button></div></form></dialog>
 <dialog id="confirmDialog"><form method="dialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><div class="actions"><button value="cancel">取消</button><button value="ok" class="danger-fill">永久删除</button></div></form></dialog>
 <div id="dropOverlay" class="drop-overlay" hidden><div><span>⇩</span>放开，加入待存入区</div></div>
 <script src="renderer.js"></script></body></html>

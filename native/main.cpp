@@ -327,7 +327,7 @@ void searchTree(const fs::path& root, const fs::path& dir, Batch& batch, const s
 }
 int run(const std::vector<std::string>& a) {
   try {
-    require(a.size()>=2, "Usage: core <drives|setup|list|search|index|batch|append|import|export|describe|mkdir|delete> <root> <relative-path> [arguments]");
+    require(a.size()>=2, "Usage: core <drives|setup|list|search|index|batch|append|import|export|describe|rename|mkdir|delete> <root> <relative-path> [arguments]");
     if(a[1]=="drives") { std::cout << drives(); return 0; }
     if(a[1]=="setup") {
       // All data lives in <SSD>/file-hero, the same folder the Android app uses.
@@ -404,6 +404,30 @@ int run(const std::vector<std::string>& a) {
       fs::remove(p); std::string warning;
       if(update) { batch.files.erase(utf(p.filename())); try { writeBatch(parent,batch); } catch(const std::exception& e) { warning=std::string("文件已删除，但说明未完整更新：")+e.what(); } }
       std::cout << "{\"deleted\":true,\"warning\":" << quote(warning) << "}";
+    } else if(cmd=="rename") {
+      // rename <root> <file-or-folder> <new-name>: the description in file-readme.txt follows the file.
+      require(a.size()==5 && p!=root && !a[3].empty(),"缺少新名称"); require(fs::exists(p),"找不到文件或文件夹");
+      require(!isReadme(p) && !isScratch(p),"file-readme.txt 是批次说明，不能重命名");
+      auto name=a[4]; nameCheck(name); auto low=lower(name);
+      require(low!="file-readme.txt" && low!="file-readme.txt.tmp" && low!="file-readme.txt.backup","file-readme.txt 是批次说明的保留名称");
+      auto parent=p.parent_path(), dest=parent/fs::u8path(name); auto old=utf(p.filename()); std::string warning;
+      if(name==old) { std::cout << "{\"name\":" << quote(name) << ",\"warning\":\"\"}"; return 0; }
+      // A change of letter case only (a.txt -> A.txt) is the same file on Windows.
+      require(!fs::exists(dest) || fs::equivalent(p,dest),"已有同名项目："+name);
+      if(fs::is_directory(p)) {
+        fs::rename(p,dest);
+        try { if(fs::exists(manifestPath(dest))) { auto batch=readBatch(dest); writeBatch(dest,batch); } }
+        catch(const std::exception& e) { warning=std::string("文件夹已重命名，但说明未更新：")+e.what(); }
+      } else {
+        require(fs::is_regular_file(p),"找不到文件"); Batch batch; bool update=false;
+        try { update=fs::exists(manifestPath(parent)); if(update) batch=readBatch(parent); } catch(...) { update=false; }
+        fs::rename(p,dest);
+        if(update && batch.files.count(old)) {
+          auto meta=batch.files[old]; batch.files.erase(old); meta["Name"]=name; batch.files[name]=meta;
+          try { writeBatch(parent,batch); } catch(...) { fs::rename(dest,p); throw; }
+        }
+      }
+      std::cout << "{\"name\":" << quote(name) << ",\"warning\":" << quote(warning) << "}";
     } else if(cmd=="import") {
       require(a.size()==5 && fs::is_directory(p),"缺少目标或来源"); auto src=fs::u8path(a[4]);
       require(fs::is_regular_file(src) && !fs::is_symlink(src),"只能存入普通文件"); nameCheck(utf(src.filename()));
