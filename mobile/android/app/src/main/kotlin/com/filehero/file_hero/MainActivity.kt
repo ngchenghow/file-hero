@@ -321,6 +321,7 @@ class MainActivity : FlutterActivity() {
                     walk(file, path, readBatch(file, false)); found
                 }
                 "delete" -> deleteEntry(path, file, call.argument<Boolean>("directory") ?: error("缺少类型"))
+                "rename" -> renameEntry(path, file, call.argument<String>("name") ?: "")
                 "index" -> { require(file.isDirectory); index(file) }
                 "describe" -> { require(file.isFile); writeMeta(file, call.argument<String>("description") ?: "") }
                 "mkdir" -> { val name = call.argument<String>("name") ?: ""; valid(name); require(file.findFile(name) == null) { "文件夹已存在" }; require(file.createDirectory(name) != null) { "无法创建文件夹" }; true }
@@ -384,6 +385,37 @@ class MainActivity : FlutterActivity() {
             catch(e: Exception) { warning = "文件已删除，但说明未完整更新：${e.message}" }
         }
         return mapOf("deleted" to true, "warning" to warning)
+    }
+    // The file's description in file-readme.txt moves with it, like the desktop app.
+    private fun renameEntry(path: String, file: DocumentFile, name: String): Map<String,Any> {
+        require(path.isNotEmpty() && file.uri != root?.uri) { "不能重命名授权根目录" }
+        valid(name)
+        val old = file.name ?: error("无法读取文件名")
+        val reserved = listOf("file-readme.txt", "file-readme.txt.tmp", "file-readme.txt.backup")
+        require(reserved.none { it.equals(old, true) }) { "file-readme.txt 是批次说明，不能重命名" }
+        require(reserved.none { it.equals(name, true) }) { "file-readme.txt 是批次说明的保留名称" }
+        if(name == old) return mapOf("name" to name, "warning" to "")
+        require(file.canWrite()) { "没有重命名此项目的权限" }
+        val parent = file.parentFile ?: error("无法读取父文件夹")
+        // SSDs are usually exFAT, where names differ only by letter case are the same name.
+        require(parent.listFiles().none { it.uri != file.uri && it.name.equals(name, true) }) { "已有同名项目：$name" }
+        val directory = file.isDirectory
+        val batch = if(!directory && parent.findFile("file-readme.txt") != null) readBatch(parent) else null
+        if(batch != null) require(parent.findFile("file-readme.txt.tmp") == null && parent.findFile("file-readme.txt.backup") == null) { "请先恢复未完成写入的说明文件" }
+        // A case-only change goes through a temporary name, or the storage provider would add " (1)".
+        if(old.equals(name, true)) require(file.renameTo("$name.file-hero-rename")) { "存储设备拒绝重命名" }
+        if(!file.renameTo(name) || file.name != name) { if(file.name != old) file.renameTo(old); error("存储设备拒绝重命名") }
+        var warning = ""
+        if(batch != null) {
+            val meta = batch.files.remove(old)
+            if(meta != null) {
+                meta["Name"] = name; batch.files[name] = meta
+                try { writeBatch(parent, batch) } catch(e: ManifestCommittedException) { warning = e.message ?: "" } catch(e: Exception) { file.renameTo(old); throw e }
+            }
+        } else if(directory && file.findFile("file-readme.txt") != null) {
+            try { val own = readBatch(file, false); if(own.header.isNotEmpty()) writeBatch(file, own) } catch(e: Exception) { warning = "文件夹已重命名，但说明未更新：${e.message}" }
+        }
+        return mapOf("name" to name, "warning" to warning)
     }
     private fun importSelected(parent: DocumentFile, batchName: String, description: String, existing: Boolean): Map<String,Any> {
         require(parent.isDirectory && parent.canWrite()) { "SSD 目标目录不可写" }

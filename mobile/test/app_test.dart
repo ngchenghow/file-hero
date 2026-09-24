@@ -35,6 +35,7 @@ void main() {
           deleted = true; return {'deleted': true, 'warning': ''};
         case 'list': if(deleted) return <Object>[]; return [{'name': fileMode ? 'photo.jpg' : '旅行批次', 'directory': !fileMode, 'size': 2048, 'fileCount': 2, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '京都照片和票据'}}];
         case 'search': return [{'name': '京都.jpg', 'path': '旅行批次/第一天/京都.jpg', 'directory': false, 'size': 1024, 'modified': '2026-09-23T10:00:00Z', 'metadata': {'Description': '清水寺'}}, {'name': '第一天', 'path': '旅行批次/第一天', 'directory': true, 'size': 1024, 'fileCount': 1, 'modified': '2026-09-23T10:00:00Z', 'metadata': {}}];
+        case 'rename': return {'name': call.arguments['name'], 'warning': ''};
         case 'thumbnail': return null;
         case 'open': return true;
         case 'export': if(cancelPicker) return null; return call.arguments['directory'] == true ? {'name': '旅行批次 (2)', 'files': 5} : true;
@@ -287,6 +288,48 @@ void main() {
     await tester.tap(find.text('打开')); await advance(tester);
     expect(calls.singleWhere((c) => c.method == 'open').arguments['path'], 'photo.jpg');
     expect(find.text('已打开「photo.jpg」'), findsOneWidget);
+  });
+  testWidgets('file detail renames the file with its extension left unselected', (tester) async {
+    target = 'SSD'; fileMode = true;
+    await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.tap(find.text('photo.jpg')); await advance(tester);
+    await tester.ensureVisible(find.text('重命名'));
+    await tester.tap(find.text('重命名')); await advance(tester);
+    expect(find.text('重命名文件'), findsOneWidget);
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.controller!.selection, const TextSelection(baseOffset: 0, extentOffset: 5));
+    await tester.enterText(find.byType(TextField), '京都.jpg');
+    await tester.tap(find.widgetWithText(FilledButton, '重命名')); await advance(tester);
+    expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': 'photo.jpg', 'name': '京都.jpg'});
+    expect(find.text('已重命名为「京都.jpg」。'), findsOneWidget);
+  });
+  testWidgets('unchanged or cancelled rename sends nothing', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.longPress(find.text('旅行批次')); await advance(tester);
+    expect(find.text('重命名文件夹'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '重命名')); await advance(tester);
+    await tester.longPress(find.text('旅行批次')); await advance(tester);
+    await tester.tap(find.text('取消')); await advance(tester);
+    expect(calls.where((c) => c.method == 'rename'), isEmpty);
+  });
+  testWidgets('long-pressing a folder renames it', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    await tester.longPress(find.text('旅行批次')); await advance(tester);
+    await tester.enterText(find.byType(TextField), '京都之旅');
+    await tester.testTextInput.receiveAction(TextInputAction.done); await advance(tester);
+    expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': '旅行批次', 'name': '京都之旅'});
+    expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '');
+  });
+  testWidgets('the open folder can be renamed and stays open under its new name', (tester) async {
+    target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);
+    expect(find.byTooltip('重命名此文件夹'), findsNothing);
+    await tester.tap(find.text('旅行批次')); await advance(tester);
+    await tester.tap(find.byTooltip('重命名此文件夹')); await advance(tester);
+    await tester.enterText(find.byType(TextField), '京都之旅');
+    await tester.tap(find.widgetWithText(FilledButton, '重命名')); await advance(tester);
+    expect(calls.singleWhere((c) => c.method == 'rename').arguments, {'path': '旅行批次', 'name': '京都之旅'});
+    expect(calls.lastWhere((c) => c.method == 'list').arguments['path'], '京都之旅');
+    expect(find.text('京都之旅'), findsOneWidget);
   });
   testWidgets('sending stops when SSD is missing', (tester) async {
     target = 'SSD'; await tester.pumpWidget(const FileHeroApp()); await advance(tester);

@@ -214,8 +214,25 @@ class _FilesPageState extends State<FilesPage> {
     setState(() { if(moved) { clearSearch(); } folder = path; thumbnails.clear(); entries = data.map((e) => Map<String,dynamic>.from(e as Map)).toList(); message = '${entries.length} 个项目'; });
     if(!moved && query.trim().isNotEmpty) { await runSearch(); }
   }
-  Future<String?> textPrompt(String title, {String initial = ''}) async {
-    return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial));
+  Future<String?> textPrompt(String title, {String initial = '', String action = '保存', int? selectEnd}) async {
+    return showDialog<String>(context: context, builder: (context) => _TextPromptDialog(title: title, initial: initial, action: action, selectEnd: selectEnd));
+  }
+  // The extension is not selected, so typing a new name keeps the file type.
+  Future<void> renameEntry(Map<String,dynamic> file) async {
+    final old = file['name'] as String;
+    final directory = file['directory'] == true;
+    final dot = directory ? -1 : old.lastIndexOf('.');
+    final typed = await textPrompt(directory ? '重命名文件夹' : '重命名文件', initial: old, action: '重命名', selectEnd: dot > 0 ? dot : old.length);
+    final name = typed?.trim() ?? '';
+    if(!mounted || name.isEmpty || name == old) { return; }
+    final path = pathOf(file);
+    await work(() async {
+      final result = Map<String,dynamic>.from(await call('rename', {'path': path, 'name': name}) as Map);
+      // Renaming the open folder moves into it under its new name.
+      final parts = path.split('/')..removeLast();
+      await load(path == folder ? [...parts, result['name'] as String].join('/') : null);
+      if(mounted) { setState(() => message = '已重命名为「${result['name']}」。${result['warning'] ?? ''}'); }
+    });
   }
   Future<void> deleteEntry(Map<String,dynamic> file) async {
     final name = file['name'] as String;
@@ -241,6 +258,7 @@ class _FilesPageState extends State<FilesPage> {
       Text('容量：${size((file['size'] as num).toInt())}\n修改日期：${file['modified']}\n首次建档：${meta['First-Indexed-UTC'] ?? '尚未建档'}\n上一次存入：${meta['Last-Stored-UTC'] == 'unknown' ? '未知' : meta['Last-Stored-UTC'] ?? '未知'}'), const SizedBox(height: 20), Text((meta['Description'] as String?)?.isNotEmpty == true ? meta['Description'] as String : '尚未填写文件描述'), const SizedBox(height: 20),
       FilledButton.icon(onPressed: () => Navigator.pop(context, 'open'), icon: const Icon(Icons.open_in_new), label: const Text('打开')),
       OutlinedButton.icon(onPressed: () => Navigator.pop(context, 'describe'), icon: const Icon(Icons.edit_outlined), label: const Text('编辑说明')),
+      if((file['name'] as String).toLowerCase() != 'file-readme.txt') OutlinedButton.icon(onPressed: () => Navigator.pop(context, 'rename'), icon: const Icon(Icons.drive_file_rename_outline), label: const Text('重命名')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'export'), icon: const Icon(Icons.download_outlined), label: const Text('导出文件副本')),
       TextButton.icon(onPressed: () => Navigator.pop(context, 'send'), icon: const Icon(Icons.bluetooth), label: const Text('蓝牙导出到其他设备')),
       const Text('本批所有文件的描述统一保存在当前文件夹的 file-readme.txt。', style: TextStyle(fontSize: 11, color: Colors.grey)),
@@ -250,6 +268,8 @@ class _FilesPageState extends State<FilesPage> {
       await work(() async { await call('open', {'path': pathOf(file)}); if(mounted) { setState(() => message = '已打开「${file['name']}」'); } });
     } else if(action == 'send') {
       await sendMenu(file);
+    } else if(action == 'rename') {
+      await renameEntry(file);
     } else if(action == 'describe') {
       final description = await textPrompt('文件描述', initial: meta['Description'] as String? ?? '');
       if(description != null) { await work(() async { await call('describe', {'path': pathOf(file), 'description': description.replaceAll(RegExp(r'[\r\n]+'), ' ')}); await load(); }); }
@@ -307,6 +327,7 @@ class _FilesPageState extends State<FilesPage> {
     return Card(margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5), elevation: 0, color: Colors.white, child: InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: busy ? null : () { if(directory) { work(() => load(pathOf(file))); } else { detail(file); } },
+      onLongPress: busy || !directory ? null : () => renameEntry(file),
       child: Padding(padding: const EdgeInsets.all(12), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         preview(file), const SizedBox(width: 14),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -333,7 +354,7 @@ class _FilesPageState extends State<FilesPage> {
       appBar: AppBar(title: const Text('file-hero', style: TextStyle(fontWeight: FontWeight.w700))),
       body: Column(children: [
         Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('每份文件，都有故事。', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 8), Text(connected ? driveName : '你的 SSD 随身文件库', style: const TextStyle(color: Color(0xff528a67))), const SizedBox(height: 16), TextField(controller: searchText, decoration: InputDecoration(hintText: '搜索当前文件夹及子文件夹', prefixIcon: const Icon(Icons.search), suffixIcon: query.isEmpty ? null : IconButton(tooltip: '清除搜索', onPressed: () => setState(clearSearch), icon: const Icon(Icons.close)), filled: true, border: const OutlineInputBorder(borderSide: BorderSide.none)), onChanged: search),
-          if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
+          if(connected) SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [IconButton(tooltip: '返回上层', onPressed: busy || folder.isEmpty ? null : () => work(() => load(folder.split('/').take(folder.split('/').length - 1).join('/'))), icon: const Icon(Icons.arrow_upward)), Text(folder.isEmpty ? '我的 SSD' : folder), if(folder.isNotEmpty) IconButton(tooltip: '重命名此文件夹', onPressed: busy ? null : () => renameEntry({'name': folder.split('/').last, 'directory': true, 'path': folder}), icon: const Icon(Icons.drive_file_rename_outline)), IconButton(tooltip: '刷新', onPressed: busy ? null : () => work(() => load()), icon: const Icon(Icons.refresh))])),
         ])),
         if(busy) const LinearProgressIndicator(),
         Expanded(child: !connected ? const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('在相册或文件管理器选择文件\n点击分享 → File Hero\n\n选择新建文件夹或已有文件夹存入 SSD。', textAlign: TextAlign.center))) : visible.isEmpty ? Center(child: Text(query.trim().isEmpty ? '没有文件。请从其他应用分享文件到 File Hero。' : busy ? '正在搜索…' : '没有匹配的文件或文件夹')) : ListView.builder(itemCount: visible.length, itemBuilder: (context,index) => fileRow(visible[index]))),
@@ -388,9 +409,12 @@ class _ShareSaveDialogState extends State<_ShareSaveDialog> {
 }
 
 class _TextPromptDialog extends StatefulWidget {
-  const _TextPromptDialog({required this.title, required this.initial});
+  const _TextPromptDialog({required this.title, required this.initial, this.action = '保存', this.selectEnd});
   final String title;
   final String initial;
+  final String action;
+  // Selects the start of the text up to here (the name without its extension) instead of placing the cursor at the end.
+  final int? selectEnd;
   @override
   State<_TextPromptDialog> createState() => _TextPromptDialogState();
 }
@@ -398,14 +422,18 @@ class _TextPromptDialog extends StatefulWidget {
 class _TextPromptDialogState extends State<_TextPromptDialog> {
   late final TextEditingController controller;
   @override
-  void initState() { super.initState(); controller = TextEditingController(text: widget.initial); }
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initial);
+    if(widget.selectEnd != null) { controller.selection = TextSelection(baseOffset: 0, extentOffset: widget.selectEnd!); }
+  }
   @override
   void dispose() { controller.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text(widget.title),
-    content: TextField(controller: controller, autofocus: true, maxLines: widget.title.contains('描述') ? 4 : 1),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('保存'))],
+    content: TextField(controller: controller, autofocus: true, maxLines: widget.title.contains('描述') ? 4 : 1, onSubmitted: widget.title.contains('描述') ? null : (value) => Navigator.pop(context, value)),
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: Text(widget.action))],
   );
 }
 
