@@ -118,6 +118,19 @@ app.whenReady().then(async () => {
     await delay(300); await idle();
     assert.equal(fs.readFileSync(path.join(base, 'exported.txt'), 'utf8'), 'Imported notes');
 
+    // The details panel closes on a click anywhere outside it, and on Esc.
+    const clickAt = async selector => {
+      const { x, y } = await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.round(r.left + 10), y: Math.round(r.top + r.height / 2) }; })()`);
+      for (const type of ['mouseDown', 'mouseUp']) window.webContents.sendInputEvent({ type, x, y, button: 'left', clickCount: 1 });
+    };
+    assert.equal(await js("document.getElementById('details').hidden"), false);
+    await clickAt('#details h2'); await delay(100);
+    assert.equal(await js("document.getElementById('details').hidden"), false);
+    await clickAt('header h1'); await until("document.getElementById('details').hidden", 'details closed by outside click');
+    await js("[...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).click()");
+    for (const type of ['keyDown', 'keyUp']) window.webContents.sendInputEvent({ type, keyCode: 'Escape' });
+    await until("document.getElementById('details').hidden", 'details closed by Esc');
+
     await js("document.getElementById('details').hidden = true; [...document.querySelectorAll('#files .card')].find(c => c.textContent.includes('notes.txt')).querySelector('.danger').click()");
     await until("document.getElementById('confirmDialog').open", 'confirm');
     await js("document.getElementById('confirmDialog').close('ok')");
@@ -130,7 +143,7 @@ app.whenReady().then(async () => {
     await until(`${tray}.includes('extra.txt')`, 'staged for screenshot');
     await delay(500);
     const screenshot = await window.webContents.capturePage(); fs.writeFileSync(path.resolve('build/desktop-preview.png'), screenshot.toPNG());
-    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, delete; screenshot saved.');
+    console.log('PASS: share before SSD, new folder, drop into current folder, folder into existing folder, unstage, picker, clear, edit, search subfolders, new folder, export, close details, delete; screenshot saved.');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

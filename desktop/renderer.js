@@ -279,6 +279,13 @@ $('mkdir').onclick = () => { $('folderName').value = ''; $('folderDialog').retur
 $('folderCancel').onclick = () => $('folderDialog').close('cancel');
 $('folderDialog').addEventListener('close', () => { if ($('folderDialog').returnValue === 'create') task(async () => { await hero.invoke('mkdir', folder, $('folderName').value.trim()); await reload(); status('文件夹已创建'); }); });
 $('close').onclick = () => { $('details').hidden = true; };
+// Clicking anywhere outside the panel (or pressing Esc) closes it; clicking another card switches to that file instead.
+document.addEventListener('pointerdown', event => {
+  if ($('details').hidden || document.querySelector('dialog[open]')) return;
+  if (event.target.closest('#details, #files .card')) return;
+  $('details').hidden = true;
+});
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) $('details').hidden = true; });
 $('save').onclick = () => task(async () => { const file = selected; const desc = $('description').value.replace(/[\r\n]+/g, ' '); await hero.invoke('describe', pathOf(file), desc); await reload(); details((results || entries).find(e => pathOf(e) === pathOf(file)) || file); status('说明已保存到 SSD'); });
 $('open').onclick = () => openFile(selected);
 $('reveal').onclick = () => hero.invoke('reveal', pathOf(selected));
